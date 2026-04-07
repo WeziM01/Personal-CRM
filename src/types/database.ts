@@ -9,6 +9,32 @@ export type Json =
 export type Database = {
 	public: {
 		Tables: {
+			profiles: {
+				Row: {
+					created_at: string;
+					user_id: string;
+					username: string;
+				};
+				Insert: {
+					created_at?: string;
+					user_id: string;
+					username: string;
+				};
+				Update: {
+					created_at?: string;
+					user_id?: string;
+					username?: string;
+				};
+				Relationships: [
+					{
+						foreignKeyName: "profiles_user_id_fkey";
+						columns: ["user_id"];
+						isOneToOne: true;
+						referencedRelation: "users";
+						referencedColumns: ["id"];
+					},
+				];
+			};
 			events: {
 				Row: {
 						category: string | null;
@@ -46,6 +72,7 @@ export type Database = {
 						company: string | null;
 					created_at: string;
 					id: string;
+					is_vip: boolean;
 						linkedin_url: string | null;
 					name: string | null;
 						phone_number: string | null;
@@ -56,6 +83,7 @@ export type Database = {
 						company?: string | null;
 					created_at?: string;
 					id?: string;
+					is_vip?: boolean;
 						linkedin_url?: string | null;
 					name?: string | null;
 						phone_number?: string | null;
@@ -66,6 +94,7 @@ export type Database = {
 						company?: string | null;
 					created_at?: string;
 					id?: string;
+					is_vip?: boolean;
 						linkedin_url?: string | null;
 					name?: string | null;
 						phone_number?: string | null;

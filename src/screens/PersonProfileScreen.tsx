@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Linking, SafeAreaView, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import { Alert, Linking, SafeAreaView, ScrollView, Share, StyleSheet, TextInput, View } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
@@ -8,6 +8,9 @@ import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
 import {
   EVENT_CATEGORY_OPTIONS,
+  buildReconnectDraft,
+  JUST_CONNECTED_THRESHOLD,
+  RECENT_CONTACT_THRESHOLD,
   buildInteractionRecord,
   createInteraction,
   createPerson,
@@ -19,6 +22,7 @@ import {
   toWhatsAppUrl,
   updateInteraction,
   updatePersonDetails,
+  isContactStale,
 } from "../lib/crm";
 import { colors, layout } from "../theme/tokens";
 
@@ -48,15 +52,15 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
   const filteredPeople = useMemo(() => {
     const statusFiltered = people.filter((person) => {
       if (statusMode === "today") {
-        return person.daysSinceLastContact === 0;
+        return person.daysSinceLastContact !== null && person.daysSinceLastContact <= JUST_CONNECTED_THRESHOLD;
       }
 
       if (statusMode === "recent") {
-        return person.daysSinceLastContact !== null && person.daysSinceLastContact <= 7;
+        return person.daysSinceLastContact !== null && person.daysSinceLastContact <= RECENT_CONTACT_THRESHOLD;
       }
 
       if (statusMode === "stale") {
-        return person.daysSinceLastContact !== null && person.daysSinceLastContact >= 14;
+        return isContactStale(person.daysSinceLastContact, person.isVip);
       }
 
       return true;
@@ -135,6 +139,7 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
       selectedPerson
         ? {
             name: selectedPerson.name,
+            isVip: selectedPerson.isVip,
             company: selectedPerson.company,
           linkedinUrl: selectedPerson.linkedinUrl,
           phoneNumber: selectedPerson.phoneNumber,
@@ -156,6 +161,7 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
     setEditorMode("edit");
     setEditorDraft({
       name: person.name,
+      isVip: person.isVip,
       company: person.company,
       linkedinUrl: person.linkedinUrl,
       phoneNumber: person.phoneNumber,
@@ -180,6 +186,7 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
           userId,
           personId: selectedPerson.id,
           name: draft.name,
+          isVip: draft.isVip,
           company: draft.company,
           linkedinUrl: draft.linkedinUrl,
           phoneNumber: draft.phoneNumber,
@@ -222,7 +229,8 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
           draft.name === "Unknown contact" ? "New Person" : draft.name,
           draft.company,
           draft.linkedinUrl,
-          draft.phoneNumber
+          draft.phoneNumber,
+          draft.isVip
         )).id;
 
       let eventId: string | null = null;
@@ -296,6 +304,93 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
       await Linking.openURL(url);
     } catch {
       Alert.alert("Open failed", "Could not open that link on this device.");
+    }
+  }
+
+  function buildMessageForSelectedPerson() {
+    if (!selectedPerson) {
+      return "";
+    }
+
+    return buildReconnectDraft({
+      name: selectedPerson.name,
+      eventName: selectedPerson.lastEventName,
+      lastInteractionNote: selectedPerson.lastInteractionNote,
+      followUp: selectedPerson.followUp,
+    });
+  }
+
+  async function handleDraftMessage() {
+    if (!selectedPerson) {
+      return;
+    }
+
+    const message = buildMessageForSelectedPerson();
+    const whatsappBase = selectedPerson.phoneNumber ? toWhatsAppUrl(selectedPerson.phoneNumber) : null;
+    const whatsappUrl = whatsappBase ? `${whatsappBase}?text=${encodeURIComponent(message)}` : null;
+
+    try {
+      if (whatsappUrl) {
+        const canOpenWhatsApp = await Linking.canOpenURL(whatsappUrl);
+        if (canOpenWhatsApp) {
+          await Linking.openURL(whatsappUrl);
+          return;
+        }
+      }
+
+      if (selectedPerson.phoneNumber) {
+        const smsUrl = `sms:${selectedPerson.phoneNumber}?body=${encodeURIComponent(message)}`;
+        const canOpenSms = await Linking.canOpenURL(smsUrl);
+        if (canOpenSms) {
+          await Linking.openURL(smsUrl);
+          return;
+        }
+      }
+
+      Alert.alert("No supported message app", "Use Copy message and paste it into any app.");
+    } catch {
+      Alert.alert("Draft failed", "Use Copy message and paste it into any app.");
+    }
+  }
+
+  async function handleCopyMessage() {
+    if (!selectedPerson) {
+      return;
+    }
+
+    const message = buildMessageForSelectedPerson();
+
+    try {
+      await Share.share({
+        message,
+        title: `Follow up with ${selectedPerson.name}`,
+      });
+    } catch {
+      Alert.alert("Copy fallback", message);
+    }
+  }
+
+  async function handleToggleVip() {
+    if (!selectedPerson) {
+      return;
+    }
+
+    try {
+      const userId = await ensureSessionUserId();
+      await updatePersonDetails({
+        userId,
+        personId: selectedPerson.id,
+        name: selectedPerson.name,
+        company: selectedPerson.company,
+        linkedinUrl: selectedPerson.linkedinUrl,
+        phoneNumber: selectedPerson.phoneNumber,
+        isVip: !selectedPerson.isVip,
+      });
+      await loadProfileData();
+      Alert.alert("Updated", !selectedPerson.isVip ? `${selectedPerson.name} marked as a lead.` : `${selectedPerson.name} is now a normal contact.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update priority.";
+      Alert.alert("Update failed", message);
     }
   }
 
@@ -411,7 +506,7 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
           {selectedPerson ? (
             <Card style={styles.featureCard}>
               <Typography variant="caption">Selected contact</Typography>
-              <Typography variant="h1">{selectedPerson.name}</Typography>
+              <Typography variant="h1">{selectedPerson.isVip ? "⭐ " : ""}{selectedPerson.name}</Typography>
               <Typography variant="body" style={styles.featureBody}>
                 {selectedPerson.bannerLabel} · {selectedPerson.interactionCount} logged moments · {selectedPerson.lastEventName || "No event yet"}
               </Typography>
@@ -421,19 +516,19 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
               {searchQuery ? <Typography variant="caption">Search: {searchQuery}</Typography> : null}
 
               <View style={styles.actionRow}>
+                <Button label="Draft Message" onPress={handleDraftMessage} fullWidth={false} size="compact" />
+                <Button label="Copy / Share" onPress={handleCopyMessage} variant="ghost" fullWidth={false} size="compact" />
+                <Button
+                  label={selectedPerson.isVip ? "⭐ Unstar lead" : "⭐ Star lead"}
+                  onPress={handleToggleVip}
+                  variant="ghost"
+                  fullWidth={false}
+                  size="compact"
+                />
                 {selectedPerson.linkedinUrl ? (
                   <Button
                     label="Open LinkedIn"
                     onPress={() => handleOpenExternal(selectedPerson.linkedinUrl)}
-                    variant="ghost"
-                    fullWidth={false}
-                    size="compact"
-                  />
-                ) : null}
-                {selectedPerson.phoneNumber && toWhatsAppUrl(selectedPerson.phoneNumber) ? (
-                  <Button
-                    label="WhatsApp"
-                    onPress={() => handleOpenExternal(toWhatsAppUrl(selectedPerson.phoneNumber) as string)}
                     variant="ghost"
                     fullWidth={false}
                     size="compact"
@@ -493,6 +588,7 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
                 <View style={styles.rowTop}>
                   <View style={styles.personCopy}>
                     <Typography variant="h2">{person.name}</Typography>
+                    {person.isVip ? <Typography variant="caption">⭐ Starred lead</Typography> : null}
                     <Typography variant="caption">
                       {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                     </Typography>
@@ -512,6 +608,7 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
 
                 <View style={styles.metaRow}>
                   <Typography variant="caption">{person.bannerLabel}</Typography>
+                  {isContactStale(person.daysSinceLastContact, person.isVip) ? <Typography variant="caption">Need a nudge</Typography> : null}
                   <Typography variant="caption">{person.interactionCount} notes</Typography>
                 </View>
               </Card>

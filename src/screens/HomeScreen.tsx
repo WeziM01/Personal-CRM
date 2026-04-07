@@ -8,12 +8,14 @@ import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
 import {
+  JUST_CONNECTED_THRESHOLD,
   buildInteractionRecord,
   createInteraction,
   createPerson,
   ensureSessionUserId,
   formatCategoryLabel,
   getOrCreateEvent,
+  isContactStale,
   listEventInsights,
   listPeopleInsights,
 } from "../lib/crm";
@@ -33,7 +35,7 @@ export function HomeScreen({ currentEvent }: HomeScreenProps) {
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const followUpPeople = useMemo(
-    () => people.filter((person) => (person.daysSinceLastContact || 0) >= 14).slice(0, 4),
+    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip)).slice(0, 4),
     [people]
   );
   const eventPulse = useMemo(() => {
@@ -102,7 +104,8 @@ export function HomeScreen({ currentEvent }: HomeScreenProps) {
         draft.name,
         draft.company,
         draft.linkedinUrl,
-        draft.phoneNumber
+        draft.phoneNumber,
+        draft.isVip
       );
 
       let eventId: string | null = null;
@@ -141,7 +144,7 @@ export function HomeScreen({ currentEvent }: HomeScreenProps) {
           <View style={styles.heroRow}>
             <View style={styles.heroCopy}>
               <Typography variant="caption">Black Book</Typography>
-              <Typography variant="h1">Quiet memory for the people worth keeping warm.</Typography>
+              <Typography variant="h1">Making follow-ups with connections easier than ever.</Typography>
             </View>
             <Button label="Add person" onPress={() => setCaptureOpen(true)} fullWidth={false} />
           </View>
@@ -160,7 +163,7 @@ export function HomeScreen({ currentEvent }: HomeScreenProps) {
                 <Typography variant="caption" style={styles.heroCaption}>People tracked</Typography>
               </View>
               <View style={styles.signalCell}>
-                <Typography variant="h2" style={styles.heroMetric}>{people.filter((person) => person.daysSinceLastContact === 0).length}</Typography>
+                <Typography variant="h2" style={styles.heroMetric}>{people.filter((person) => (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD).length}</Typography>
                 <Typography variant="caption" style={styles.heroCaption}>Contacted today</Typography>
               </View>
               <View style={styles.signalCell}>

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "personal-crm-mvp",
+    "name": "Blackbook Pulse",
     "slug": "personal-crm-mvp",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,7 +13,11 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.wezzi.personalcrm",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -25,6 +29,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "6504c040-f9cf-420c-9839-1322b892c1c6"
+      }
     }
   }
 }

@@ -278,7 +278,8 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         draft.name,
         draft.company,
         draft.linkedinUrl,
-        draft.phoneNumber
+        draft.phoneNumber,
+        draft.isVip
       );
       let linkedEventId: string | null = null;
       const eventName = currentEvent?.name || draft.event;

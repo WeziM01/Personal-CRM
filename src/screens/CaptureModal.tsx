@@ -16,6 +16,7 @@ import { colors, layout, radius } from "../theme/tokens";
 
 export type ParsedPersonDraft = {
 	name: string;
+	isVip: boolean;
 	company: string;
 	linkedinUrl: string;
 	phoneNumber: string;
@@ -28,6 +29,7 @@ export type ParsedPersonDraft = {
 
 const emptyDraft: ParsedPersonDraft = {
 	name: "",
+	isVip: false,
 	company: "",
 	linkedinUrl: "",
 	phoneNumber: "",
@@ -184,6 +186,17 @@ export function CaptureModal({
 								editable={!lockedEvent}
 							/>
 							<Typography variant="body">.</Typography>
+						</View>
+
+						<View style={styles.priorityRow}>
+							<Typography variant="caption">Priority</Typography>
+							<Button
+								label={draft.isVip ? "⭐ Starred lead" : "⭐ Mark as lead"}
+								onPress={() => setDraft((current) => ({ ...current, isVip: !current.isVip }))}
+								variant={draft.isVip ? "primary" : "ghost"}
+								fullWidth={false}
+								size="compact"
+							/>
 						</View>
 
 						<View style={styles.optionalSection}>
@@ -358,6 +371,12 @@ const styles = StyleSheet.create({
 		flexDirection: "row",
 		gap: 10,
 		flexWrap: "wrap",
+	},
+	priorityRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "space-between",
+		gap: 12,
 	},
 	optionalSection: {
 		gap: 10,

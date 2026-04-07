@@ -5,6 +5,7 @@ import { missingSupabaseEnvMessage, supabase } from "./supabase";
 export type PersonRow = {
   company: string | null;
   id: string;
+  is_vip: boolean;
   linkedin_url: string | null;
   name: string | null;
   phone_number: string | null;
@@ -42,6 +43,7 @@ export type EventCategory =
 export type PersonInsight = {
   id: string;
   name: string;
+  isVip: boolean;
   company: string;
   linkedinUrl: string;
   phoneNumber: string;
@@ -69,6 +71,13 @@ export type EventInsight = {
   lastConnectedLabel: string;
   featuredPeople: string[];
 };
+
+// Demo toggle: set to false to return to day-based reminder timing.
+export const FAST_REMINDER_DEMO_MODE = true;
+export const STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 45 : 14;
+export const RECENT_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
+export const JUST_CONNECTED_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 10 : 0;
+export const VIP_STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
 
 export const EVENT_CATEGORY_OPTIONS: Array<{ label: string; value: EventCategory | "all" }> = [
   { label: "All", value: "all" },
@@ -193,7 +202,8 @@ export async function createPerson(
   name: string,
   company?: string,
   linkedinUrl?: string,
-  phoneNumber?: string
+  phoneNumber?: string,
+  isVip = false
 ) {
   const client = assertClient();
 
@@ -203,10 +213,11 @@ export async function createPerson(
       user_id: userId,
       name: name.trim() || null,
       company: company?.trim() || null,
+      is_vip: isVip,
       linkedin_url: normalizeLinkedInUrl(linkedinUrl),
       phone_number: normalizePhoneNumber(phoneNumber),
     })
-    .select("id,name,company,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
     .single();
 
   assertNoError(error);
@@ -238,6 +249,7 @@ export async function updatePersonDetails(input: {
   company?: string;
   linkedinUrl?: string;
   phoneNumber?: string;
+  isVip?: boolean;
 }) {
   const client = assertClient();
 
@@ -246,6 +258,7 @@ export async function updatePersonDetails(input: {
     .update({
       name: input.name.trim() || null,
       company: input.company?.trim() || null,
+      is_vip: input.isVip,
       linkedin_url: normalizeLinkedInUrl(input.linkedinUrl),
       phone_number: normalizePhoneNumber(input.phoneNumber),
     })
@@ -337,7 +350,7 @@ export async function listRecentPeople(userId: string, limit = 8) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -413,7 +426,7 @@ export async function getFirstPerson(userId: string) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -446,6 +459,7 @@ export async function listPeopleInsights(userId: string) {
     return {
       id: person.id,
       name: person.name || "Unknown contact",
+      isVip: Boolean(person.is_vip),
       company: person.company || extractCompany(lastInteraction?.raw_note || ""),
       linkedinUrl: person.linkedin_url || "",
       phoneNumber: person.phone_number || "",
@@ -462,8 +476,8 @@ export async function listPeopleInsights(userId: string) {
       ),
       followUp: extractFollowUp(lastInteraction?.raw_note || ""),
       daysSinceLastContact,
-      statusLabel: buildContactStatus(daysSinceLastContact),
-      bannerLabel: buildContactBanner(daysSinceLastContact),
+      statusLabel: buildContactStatus(daysSinceLastContact, Boolean(person.is_vip)),
+      bannerLabel: buildContactBanner(daysSinceLastContact, Boolean(person.is_vip)),
     } as PersonInsight;
   });
 }
@@ -636,43 +650,90 @@ export function formatCategoryLabel(category: EventCategory) {
 
 export function getDaysSince(value: string) {
   const diff = Date.now() - new Date(value).getTime();
+  if (FAST_REMINDER_DEMO_MODE) {
+    return Math.max(0, Math.floor(diff / 1000));
+  }
+
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
 }
 
-export function buildContactStatus(daysSinceLastContact: number | null) {
+export function buildContactStatus(daysSinceLastContact: number | null, isVip = false) {
   if (daysSinceLastContact === null) {
     return "No contact yet";
   }
 
-  if (daysSinceLastContact === 0) {
-    return "Connected today";
+  if (daysSinceLastContact <= JUST_CONNECTED_THRESHOLD) {
+    return FAST_REMINDER_DEMO_MODE ? "Connected just now" : "Connected today";
   }
 
-  if (daysSinceLastContact <= 7) {
+  if (daysSinceLastContact <= RECENT_CONTACT_THRESHOLD) {
     return "Recently connected";
   }
 
-  if (daysSinceLastContact <= 30) {
+  if (daysSinceLastContact <= getStaleThreshold(isVip)) {
     return "Cooling";
   }
 
   return "Needs follow-up";
 }
 
-export function buildContactBanner(daysSinceLastContact: number | null) {
+export function buildContactBanner(daysSinceLastContact: number | null, isVip = false) {
   if (daysSinceLastContact === null) {
     return "No contact on record yet";
   }
 
-  if (daysSinceLastContact === 0) {
-    return "Last connected today";
+  if (daysSinceLastContact <= JUST_CONNECTED_THRESHOLD) {
+    return FAST_REMINDER_DEMO_MODE ? "Last connected just now" : "Last connected today";
+  }
+
+  if (FAST_REMINDER_DEMO_MODE) {
+    if (daysSinceLastContact === 1) {
+      return "Last connected 1 second ago";
+    }
+
+    if (daysSinceLastContact >= getStaleThreshold(isVip)) {
+      return `Priority nudge: ${daysSinceLastContact}s since contact`;
+    }
+
+    return `Haven't connected in ${daysSinceLastContact} seconds`;
   }
 
   if (daysSinceLastContact === 1) {
     return "Last connected 1 day ago";
   }
 
+  if (daysSinceLastContact >= getStaleThreshold(isVip)) {
+    return `Priority nudge: ${daysSinceLastContact} days since contact`;
+  }
+
   return `Haven't connected in ${daysSinceLastContact} days`;
+}
+
+export function getStaleThreshold(isVip: boolean) {
+  return isVip ? VIP_STALE_CONTACT_THRESHOLD : STALE_CONTACT_THRESHOLD;
+}
+
+export function isContactStale(daysSinceLastContact: number | null, isVip: boolean) {
+  if (daysSinceLastContact === null) {
+    return false;
+  }
+
+  return daysSinceLastContact >= getStaleThreshold(isVip);
+}
+
+export function buildReconnectDraft(input: {
+  name: string;
+  eventName?: string | null;
+  lastInteractionNote?: string;
+  followUp?: string;
+}) {
+  const event = input.eventName || "the event";
+  const note = input.lastInteractionNote?.trim() || "our chat";
+  const followUp = input.followUp?.trim() && input.followUp.trim().toLowerCase() !== "none yet"
+    ? input.followUp.trim()
+    : "catch up properly";
+
+  return `Hey ${input.name}, great meeting you at ${event}. Picking up from ${note}. Wanted to follow up on ${followUp}.`;
 }
 
 export function formatDateTime(value: string) {
