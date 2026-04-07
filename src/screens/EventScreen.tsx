@@ -176,6 +176,15 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventEditorOpen(true);
   }
 
+  function openCreateEventWithName(name: string) {
+    setEventEditorMode("create");
+    setEventDraft({
+      name,
+      category: currentEvent?.category || "",
+    });
+    setEventEditorOpen(true);
+  }
+
   function openEditEvent() {
     if (!selectedEvent) {
       return;
@@ -262,6 +271,28 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     } finally {
       setDeletingEvent(false);
       setDeleteArmedEventId(null);
+    }
+  }
+
+  async function handleQuickCreateEvent() {
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery || isSavingEvent) {
+      return;
+    }
+
+    try {
+      setSavingEvent(true);
+      const userId = await ensureSessionUserId();
+      const event = await getOrCreateEvent(userId, trimmedQuery, null);
+      setSelectedEventId(event.id);
+      setSearchQuery("");
+      await loadEventData();
+      Alert.alert("Event created", `${event.name} is now in your event list.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create event.";
+      Alert.alert("Save failed", message);
+    } finally {
+      setSavingEvent(false);
     }
   }
 
@@ -457,7 +488,20 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               </View>
             ))}
             {!isLoading && groupedEvents.length === 0 ? (
-              <Typography variant="body">No event categories match this filter yet.</Typography>
+              searchQuery.trim() ? (
+                <Card style={styles.emptyStateCard}>
+                  <Typography variant="h2">No event found for "{searchQuery.trim()}"</Typography>
+                  <Typography variant="body" style={styles.secondaryText}>
+                    Add it now and keep the search term as the event name.
+                  </Typography>
+                  <View style={styles.emptyStateActions}>
+                    <Button label={`Add ${searchQuery.trim()}`} onPress={handleQuickCreateEvent} fullWidth={false} size="compact" loading={isSavingEvent} />
+                    <Button label="Edit before saving" onPress={() => openCreateEventWithName(searchQuery.trim())} variant="ghost" fullWidth={false} size="compact" />
+                  </View>
+                </Card>
+              ) : (
+                <Typography variant="body">No event categories match this filter yet.</Typography>
+              )
             ) : null}
           </View>
 
@@ -645,6 +689,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   featureActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  emptyStateCard: {
+    gap: 10,
+  },
+  emptyStateActions: {
     flexDirection: "row",
     gap: 8,
     flexWrap: "wrap",

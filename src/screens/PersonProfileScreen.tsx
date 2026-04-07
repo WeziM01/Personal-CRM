@@ -152,6 +152,26 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
     setCaptureOpen(true);
   }
 
+  function openCreatePersonFromSearch() {
+    const nameFromSearch = searchQuery.trim();
+    if (!nameFromSearch) {
+      return;
+    }
+
+    setSelectedPersonId(null);
+    setEditorMode("create");
+    setEditorDraft({
+      name: nameFromSearch,
+      isVip: false,
+      company: "",
+      event: currentEvent?.name || "",
+      eventCategory: currentEvent?.category || "",
+      notes: "",
+      followUp: "",
+    });
+    setCaptureOpen(true);
+  }
+
   function openEditPerson(person = selectedPerson) {
     if (!person) {
       return;
@@ -614,7 +634,19 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
               </Card>
             ))}
             {!isLoading && filteredPeople.length === 0 ? (
-              <Typography variant="body">No contacts match this filter yet.</Typography>
+              searchQuery.trim() ? (
+                <Card style={styles.emptyStateCard}>
+                  <Typography variant="h2">No contact found for "{searchQuery.trim()}"</Typography>
+                  <Typography variant="body" style={styles.timelineCount}>
+                    Create a new contact with that name and fill in the rest from there.
+                  </Typography>
+                  <View style={styles.emptyStateActions}>
+                    <Button label={`Create ${searchQuery.trim()}`} onPress={openCreatePersonFromSearch} fullWidth={false} size="compact" />
+                  </View>
+                </Card>
+              ) : (
+                <Typography variant="body">No contacts match this filter yet.</Typography>
+              )
             ) : null}
           </View>
         </ScrollView>
@@ -710,6 +742,14 @@ const styles = StyleSheet.create({
   },
   timelineStack: {
     gap: 14,
+  },
+  emptyStateCard: {
+    gap: 10,
+  },
+  emptyStateActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
   },
   selectedCard: {
     borderColor: colors.primaryAction,

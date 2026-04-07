@@ -1,6 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
-import { Modal, SafeAreaView, StyleSheet, View } from "react-native";
+import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View } from "react-native";
 
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
 import { formatCategoryLabel } from "./src/lib/crm";
@@ -20,6 +20,7 @@ export default function App() {
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
   const [authBanner, setAuthBanner] = useState<string | null>(null);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
+  const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [screen, setScreen] = useState<ScreenKey>("home");
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
@@ -68,6 +69,47 @@ export default function App() {
 
   if (!user) {
     return <AuthScreen onAuthenticated={(message) => setAuthBanner(message)} />;
+  }
+
+  async function handleSupportEmail(type: "bug" | "feature") {
+    const subject = type === "bug" ? "Bug Report - Personal CRM MVP" : "Feature Request - Personal CRM MVP";
+    const body = type === "bug"
+      ? [
+          "What happened?",
+          "",
+          "What did you expect to happen?",
+          "",
+          "Steps to reproduce:",
+          "1. ",
+          "2. ",
+          "3. ",
+          "",
+          `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
+        ].join("\n")
+      : [
+          "What would you like the app to do?",
+          "",
+          "Why would it help?",
+          "",
+          "When would you use it?",
+          "",
+          `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
+        ].join("\n");
+
+    const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (!canOpen) {
+        Alert.alert("No mail app found", "Set up a mail app on this device to send feedback.");
+        return;
+      }
+
+      await Linking.openURL(url);
+      setSettingsOpen(false);
+    } catch {
+      Alert.alert("Could not open mail", "Please try again after setting a default mail app.");
+    }
   }
 
   return (
@@ -126,6 +168,14 @@ export default function App() {
 
               signOutCurrentUser();
             }}
+            variant="ghost"
+            fullWidth={false}
+            size="compact"
+            style={styles.switchButton}
+          />
+          <Button
+            label="⚙️"
+            onPress={() => setSettingsOpen(true)}
             variant="ghost"
             fullWidth={false}
             size="compact"
@@ -209,6 +259,24 @@ export default function App() {
         />
       </Modal>
 
+      <Modal visible={isSettingsOpen} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.settingsContainer}>
+            <View style={styles.settingsHeader}>
+              <View style={styles.settingsCopy}>
+                <Button label="Settings" onPress={() => undefined} disabled fullWidth={false} size="compact" />
+              </View>
+              <Button label="Close" onPress={() => setSettingsOpen(false)} variant="ghost" fullWidth={false} size="compact" />
+            </View>
+
+            <View style={styles.settingsActions}>
+              <Button label="🐛 Report a Bug" onPress={() => handleSupportEmail("bug")} />
+              <Button label="💡 Suggest a Feature" onPress={() => handleSupportEmail("feature")} variant="ghost" />
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
       <StatusBar style="dark" />
     </SafeAreaView>
   );
@@ -257,5 +325,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 24,
+  },
+  settingsContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 24,
+    gap: 16,
+  },
+  settingsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  settingsCopy: {
+    flex: 1,
+  },
+  settingsActions: {
+    gap: 12,
+    marginTop: 12,
   },
 });
