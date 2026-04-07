@@ -2,9 +2,11 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View } from "react-native";
 
+import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
 import { formatCategoryLabel } from "./src/lib/crm";
 import { getCurrentUsername, signOutCurrentUser } from "./src/lib/auth";
+import { supabaseConfigMessage } from "./src/lib/supabase";
 import { Button } from "./src/components/ui/Button";
 import { AuthScreen } from "./src/screens/AuthScreen";
 import { EventScreen } from "./src/screens/EventScreen";
@@ -26,6 +28,24 @@ export default function App() {
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
 
   const isGuest = Boolean(user?.is_anonymous);
+
+  if (supabaseConfigMessage) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingWrap}>
+          <View style={styles.configCard}>
+            <Typography variant="h2">Supabase configuration error</Typography>
+            <Typography variant="body" style={styles.configText}>
+              {supabaseConfigMessage}
+            </Typography>
+            <Typography variant="body" style={styles.configText}>
+              Add the same EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY values from your local .env to Vercel Project Settings, then redeploy.
+            </Typography>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -325,6 +345,19 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 24,
+  },
+  configCard: {
+    width: "100%",
+    maxWidth: 560,
+    padding: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    gap: 12,
+  },
+  configText: {
+    color: colors.textSecondary,
   },
   settingsContainer: {
     flex: 1,
