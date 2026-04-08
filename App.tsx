@@ -5,13 +5,13 @@ import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View } from "react-nat
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
 import { formatCategoryLabel } from "./src/lib/crm";
-import { getCurrentUsername, signOutCurrentUser } from "./src/lib/auth";
+import { getCurrentUsername, signInAsGuest, signOutCurrentUser } from "./src/lib/auth";
 import { supabaseConfigMessage } from "./src/lib/supabase";
 import { Button } from "./src/components/ui/Button";
 import { AuthScreen } from "./src/screens/AuthScreen";
 import { EventScreen } from "./src/screens/EventScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
-import { PersonProfileScreen } from "./src/screens/PersonProfileScreen";
+import { PersonProfileScreen, PersonStatusMode } from "./src/screens/PersonProfileScreen";
 import { useAuth } from "./src/hooks/useAuth";
 import { colors } from "./src/theme/tokens";
 
@@ -24,6 +24,8 @@ export default function App() {
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [screen, setScreen] = useState<ScreenKey>("home");
+  const [personStatusMode, setPersonStatusMode] = useState<PersonStatusMode>("all");
+  const [personStatusNonce, setPersonStatusNonce] = useState(0);
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
 
@@ -132,6 +134,12 @@ export default function App() {
     }
   }
 
+  function handleOpenPeopleFilter(status: PersonStatusMode) {
+    setPersonStatusMode(status);
+    setPersonStatusNonce((value) => value + 1);
+    setScreen("person");
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.topBar}>
@@ -180,13 +188,18 @@ export default function App() {
           />
           <Button
             label={isGuest ? "Login / Sign up" : "Log out"}
-            onPress={() => {
+            onPress={async () => {
               if (isGuest) {
                 setAuthModalOpen(true);
                 return;
               }
 
-              signOutCurrentUser();
+              try {
+                await signOutCurrentUser();
+                await signInAsGuest();
+              } catch {
+                setAuthBanner("Logged out. Tap Login / Sign up to continue.");
+              }
             }}
             variant="ghost"
             fullWidth={false}
@@ -248,9 +261,15 @@ export default function App() {
       ) : null}
 
       <View style={styles.content}>
-        {screen === "home" ? <HomeScreen currentEvent={currentEvent} /> : null}
+        {screen === "home" ? <HomeScreen currentEvent={currentEvent} onOpenPeopleFilter={handleOpenPeopleFilter} /> : null}
         {screen === "event" ? <EventScreen currentEvent={currentEvent} /> : null}
-        {screen === "person" ? <PersonProfileScreen currentEvent={currentEvent} /> : null}
+        {screen === "person" ? (
+          <PersonProfileScreen
+            currentEvent={currentEvent}
+            forcedStatusMode={personStatusMode}
+            forcedStatusNonce={personStatusNonce}
+          />
+        ) : null}
       </View>
 
       <CurrentEventSheet

@@ -27,13 +27,19 @@ import {
 import { colors, layout } from "../theme/tokens";
 
 type SortMode = "recent" | "stale" | "name" | "frequency";
-type StatusMode = "all" | "today" | "recent" | "stale";
+export type PersonStatusMode = "all" | "today" | "recent" | "stale";
 
 type PersonProfileScreenProps = {
   currentEvent: CurrentEventValue | null;
+  forcedStatusMode?: PersonStatusMode | null;
+  forcedStatusNonce?: number;
 };
 
-export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) {
+export function PersonProfileScreen({
+  currentEvent,
+  forcedStatusMode = null,
+  forcedStatusNonce = 0,
+}: PersonProfileScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [isDeleting, setDeleting] = useState(false);
@@ -43,7 +49,7 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("recent");
-  const [statusMode, setStatusMode] = useState<StatusMode>("all");
+  const [statusMode, setStatusMode] = useState<PersonStatusMode>("all");
   const [categoryMode, setCategoryMode] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
@@ -132,6 +138,14 @@ export function PersonProfileScreen({ currentEvent }: PersonProfileScreenProps) 
   useEffect(() => {
     loadProfileData();
   }, []);
+
+  useEffect(() => {
+    if (!forcedStatusMode) {
+      return;
+    }
+
+    setStatusMode(forcedStatusMode);
+  }, [forcedStatusMode, forcedStatusNonce]);
 
   function openCreateInteraction() {
     setEditorMode("create");

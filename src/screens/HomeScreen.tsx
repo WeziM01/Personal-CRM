@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
+import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
@@ -20,24 +20,56 @@ import {
   listPeopleInsights,
 } from "../lib/crm";
 import { colors, layout } from "../theme/tokens";
+import { PersonStatusMode } from "./PersonProfileScreen";
 
 type HomeScreenProps = {
   currentEvent: CurrentEventValue | null;
+  onOpenPeopleFilter?: (status: PersonStatusMode) => void;
 };
 
-export function HomeScreen({ currentEvent }: HomeScreenProps) {
+type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
+
+export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
   const [events, setEvents] = useState<Awaited<ReturnType<typeof listEventInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const followUpPeople = useMemo(
     () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip)).slice(0, 4),
     [people]
   );
+  const contactedTodayPeople = useMemo(
+    () => people.filter((person) => (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD),
+    [people]
+  );
+  const signalPeople = useMemo(() => {
+    if (activeSignal === "tracked") {
+      return people;
+    }
+
+    if (activeSignal === "contactedToday") {
+      return contactedTodayPeople;
+    }
+
+    if (activeSignal === "needNudge") {
+      return people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip));
+    }
+
+    return recentPeople;
+  }, [activeSignal, contactedTodayPeople, people, recentPeople]);
+  const signalHeading =
+    activeSignal === "tracked"
+      ? "People tracked"
+      : activeSignal === "contactedToday"
+        ? "Contacted today"
+        : activeSignal === "needNudge"
+          ? "People who need a nudge"
+          : "Recently connected";
   const eventPulse = useMemo(() => {
     const counts = new Map<string, number>();
     events.forEach((event) => {
@@ -158,20 +190,76 @@ export function HomeScreen({ currentEvent }: HomeScreenProps) {
           <Card style={styles.heroCard}>
             <Typography variant="caption" style={styles.heroCaption}>Signals</Typography>
             <View style={styles.signalGrid}>
-              <View style={styles.signalCell}>
+              <Pressable
+                style={[styles.signalCell, activeSignal === "tracked" ? styles.signalCellActive : null]}
+                onPress={() => {
+                  setActiveSignal("tracked");
+                  onOpenPeopleFilter?.("all");
+                }}
+              >
                 <Typography variant="h2" style={styles.heroMetric}>{people.length}</Typography>
                 <Typography variant="caption" style={styles.heroCaption}>People tracked</Typography>
-              </View>
-              <View style={styles.signalCell}>
-                <Typography variant="h2" style={styles.heroMetric}>{people.filter((person) => (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD).length}</Typography>
+              </Pressable>
+              <Pressable
+                style={[styles.signalCell, activeSignal === "contactedToday" ? styles.signalCellActive : null]}
+                onPress={() => {
+                  setActiveSignal("contactedToday");
+                  onOpenPeopleFilter?.("today");
+                }}
+              >
+                <Typography variant="h2" style={styles.heroMetric}>{contactedTodayPeople.length}</Typography>
                 <Typography variant="caption" style={styles.heroCaption}>Contacted today</Typography>
-              </View>
-              <View style={styles.signalCell}>
-                <Typography variant="h2" style={styles.heroMetric}>{followUpPeople.length}</Typography>
+              </Pressable>
+              <Pressable
+                style={[styles.signalCell, activeSignal === "needNudge" ? styles.signalCellActive : null]}
+                onPress={() => {
+                  setActiveSignal("needNudge");
+                  onOpenPeopleFilter?.("stale");
+                }}
+              >
+                <Typography variant="h2" style={styles.heroMetric}>{people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip)).length}</Typography>
                 <Typography variant="caption" style={styles.heroCaption}>Need a nudge</Typography>
-              </View>
+              </Pressable>
             </View>
           </Card>
+
+          {activeSignal !== "all" ? (
+            <View style={styles.sectionHeaderRow}>
+              <Typography variant="caption">{signalHeading}</Typography>
+              <Button
+                label="Clear"
+                onPress={() => setActiveSignal("all")}
+                variant="ghost"
+                fullWidth={false}
+                size="compact"
+              />
+            </View>
+          ) : null}
+
+          {activeSignal !== "all" ? (
+            <View style={styles.section}>
+              {signalPeople.map((person) => (
+                <Card key={`signal-${person.id}`} style={styles.connectionCard}>
+                  <View style={styles.connectionHeader}>
+                    <View style={styles.connectionMain}>
+                      <Typography variant="h2">{person.name}</Typography>
+                      <Typography variant="caption">
+                        {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
+                      </Typography>
+                    </View>
+                    <Typography variant="caption">{person.statusLabel}</Typography>
+                  </View>
+                  <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
+                    {person.lastInteractionNote}
+                  </Typography>
+                  <Typography variant="caption">{person.bannerLabel}</Typography>
+                </Card>
+              ))}
+              {!isLoading && signalPeople.length === 0 ? (
+                <Typography variant="body">No contacts in this segment yet.</Typography>
+              ) : null}
+            </View>
+          ) : null}
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -310,6 +398,11 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 6,
   },
+  signalCellActive: {
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.4)",
+  },
   heroMetric: {
     color: colors.background,
   },
@@ -321,6 +414,12 @@ const styles = StyleSheet.create({
   },
   sectionHeader: {
     gap: 4,
+  },
+  sectionHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
   },
   sectionMeta: {
     color: colors.textSecondary,
