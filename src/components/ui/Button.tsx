@@ -61,7 +61,8 @@ export function Button({
           {leftIcon}
           <Typography
             variant="body"
-            style={primary ? styles.primaryLabel : styles.ghostLabel}
+            style={[styles.label, primary ? styles.primaryLabel : styles.ghostLabel]}
+            numberOfLines={1}
           >
             {label}
           </Typography>
@@ -97,6 +98,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  label: {
+    flexShrink: 1,
+    textAlign: "center",
   },
   primaryLabel: {
     color: colors.background,

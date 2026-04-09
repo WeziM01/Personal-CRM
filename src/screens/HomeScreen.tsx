@@ -375,8 +375,9 @@ const styles = StyleSheet.create({
   },
   heroRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "flex-start",
     justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: 12,
   },
   heroCopy: {

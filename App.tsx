@@ -1,6 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
-import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View } from "react-native";
+import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View, useWindowDimensions } from "react-native";
 
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
@@ -18,6 +18,9 @@ import { colors } from "./src/theme/tokens";
 type ScreenKey = "home" | "event" | "person";
 
 export default function App() {
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 880;
+  const isVeryCompactLayout = width < 520;
   const { user, isLoading } = useAuth();
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
@@ -151,7 +154,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.topBar}>
+      <View style={[styles.topBar, isCompactLayout ? styles.topBarCompact : null]}>
         <View>
           <Button
             label="Home"
@@ -162,7 +165,7 @@ export default function App() {
             style={styles.switchButton}
           />
         </View>
-        <View style={styles.switcher}>
+        <View style={[styles.switcher, isCompactLayout ? styles.switcherCompact : null]}>
           <Button
             label={isGuest ? "Guest" : `@${currentUsername || "member"}`}
             onPress={() => {
@@ -176,15 +179,21 @@ export default function App() {
             variant="ghost"
             fullWidth={false}
             size="compact"
-            style={styles.switchButton}
+            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
           />
           <Button
-            label={currentEvent ? `Current: ${currentEvent.name}` : "Set Current Event"}
+            label={
+              currentEvent
+                ? isVeryCompactLayout
+                  ? "Current Event"
+                  : `Current: ${currentEvent.name}`
+                : "Set Current Event"
+            }
             onPress={() => setCurrentEventOpen(true)}
             variant="ghost"
             fullWidth={false}
             size="compact"
-            style={styles.currentEventButton}
+            style={[styles.currentEventButton, isCompactLayout ? styles.switchButtonCompact : null]}
           />
           <Button
             label="Events"
@@ -192,7 +201,7 @@ export default function App() {
             variant={screen === "event" ? "primary" : "ghost"}
             fullWidth={false}
             size="compact"
-            style={styles.switchButton}
+            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
           />
           <Button
             label="People"
@@ -200,7 +209,7 @@ export default function App() {
             variant={screen === "person" ? "primary" : "ghost"}
             fullWidth={false}
             size="compact"
-            style={styles.switchButton}
+            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
           />
           <Button
             label="⚙️"
@@ -208,7 +217,7 @@ export default function App() {
             variant="ghost"
             fullWidth={false}
             size="compact"
-            style={styles.switchButton}
+            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
           />
         </View>
       </View>
@@ -328,6 +337,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
+  switcherCompact: {
+    flexWrap: "wrap",
+  },
   topBar: {
     paddingHorizontal: 16,
     paddingTop: 12,
@@ -336,6 +348,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     gap: 12,
+  },
+  topBarCompact: {
+    alignItems: "stretch",
+    flexDirection: "column",
   },
   currentEventButton: {
     maxWidth: 170,
@@ -349,6 +365,9 @@ const styles = StyleSheet.create({
   },
   switchButton: {
     minHeight: 40,
+  },
+  switchButtonCompact: {
+    maxWidth: "100%",
   },
   content: {
     flex: 1,
