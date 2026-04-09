@@ -3,6 +3,7 @@ import {
 	Modal,
 	Pressable,
 	SafeAreaView,
+	ScrollView,
 	StyleSheet,
 	TextInput,
 	View,
@@ -131,7 +132,12 @@ export function CaptureModal({
 	return (
 		<Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
 			<SafeAreaView style={styles.safeArea}>
-				<View style={styles.container}>
+				<ScrollView
+					style={styles.container}
+					contentContainerStyle={styles.content}
+					showsVerticalScrollIndicator={false}
+					keyboardShouldPersistTaps="handled"
+				>
 					<View style={styles.headerRow}>
 						<Typography variant="h1">{title}</Typography>
 						<Pressable onPress={onClose} hitSlop={12}>
@@ -296,7 +302,7 @@ export function CaptureModal({
 						<Button label={saveLabel} onPress={handleSave} loading={isSaving} disabled={!canSave} />
 						<Button label="Cancel" onPress={onClose} variant="ghost" />
 					</View>
-				</View>
+				</ScrollView>
 			</SafeAreaView>
 		</Modal>
 	);
@@ -310,9 +316,11 @@ const styles = StyleSheet.create({
 	container: {
 		flex: 1,
 		backgroundColor: colors.background,
+	},
+	content: {
 		paddingHorizontal: layout.screenPaddingHorizontal,
 		paddingTop: layout.stackGap,
-		paddingBottom: layout.stackGap,
+		paddingBottom: layout.stackGap * 2,
 		gap: 18,
 	},
 	headerRow: {

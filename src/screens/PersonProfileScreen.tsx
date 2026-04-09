@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Linking, SafeAreaView, ScrollView, Share, StyleSheet, TextInput, View } from "react-native";
+import { Alert, Linking, SafeAreaView, ScrollView, Share, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
@@ -40,6 +40,8 @@ export function PersonProfileScreen({
   forcedStatusMode = null,
   forcedStatusNonce = 0,
 }: PersonProfileScreenProps) {
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 720;
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [isDeleting, setDeleting] = useState(false);
@@ -432,12 +434,17 @@ export function PersonProfileScreen({
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <View style={styles.headerRow}>
+          <View style={[styles.headerRow, isCompactLayout ? styles.headerRowCompact : null]}>
             <View style={styles.headerCopy}>
               <Typography variant="caption">People</Typography>
               <Typography variant="h1">Your live contact ledger, sorted by warmth and context.</Typography>
             </View>
-            <Button label="Add interaction" onPress={openCreateInteraction} fullWidth={false} />
+            <Button
+              label="Add interaction"
+              onPress={openCreateInteraction}
+              fullWidth={isCompactLayout}
+              style={isCompactLayout ? styles.headerActionButtonCompact : null}
+            />
           </View>
 
           <Card>
@@ -705,6 +712,12 @@ const styles = StyleSheet.create({
   headerCopy: {
     flex: 1,
     gap: 8,
+  },
+  headerRowCompact: {
+    alignItems: "stretch",
+  },
+  headerActionButtonCompact: {
+    width: "100%",
   },
   controlRow: {
     flexDirection: "row",

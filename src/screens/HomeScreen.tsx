@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
+import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View, useWindowDimensions } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
@@ -30,6 +30,8 @@ type HomeScreenProps = {
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
 export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps) {
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 720;
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
@@ -173,12 +175,17 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.heroRow}>
+          <View style={[styles.heroRow, isCompactLayout ? styles.heroRowCompact : null]}>
             <View style={styles.heroCopy}>
               <Typography variant="caption">Black Book</Typography>
               <Typography variant="h1">Making follow-ups with connections easier than ever.</Typography>
             </View>
-            <Button label="Add person" onPress={() => setCaptureOpen(true)} fullWidth={false} />
+            <Button
+              label="Add person"
+              onPress={() => setCaptureOpen(true)}
+              fullWidth={isCompactLayout}
+              style={isCompactLayout ? styles.heroActionCompact : null}
+            />
           </View>
 
           {errorMessage ? (
@@ -383,6 +390,12 @@ const styles = StyleSheet.create({
   heroCopy: {
     flex: 1,
     gap: 8,
+  },
+  heroRowCompact: {
+    alignItems: "stretch",
+  },
+  heroActionCompact: {
+    width: "100%",
   },
   heroCard: {
     backgroundColor: colors.primaryAction,

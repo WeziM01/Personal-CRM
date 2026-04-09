@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -43,6 +44,8 @@ type EventScreenProps = {
 };
 
 export function EventScreen({ currentEvent }: EventScreenProps) {
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 720;
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isEventEditorOpen, setEventEditorOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
@@ -348,14 +351,25 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <View style={styles.headerRow}>
+          <View style={[styles.headerRow, isCompactLayout ? styles.headerRowCompact : null]}>
             <View style={styles.headerCopy}>
               <Typography variant="caption">Events</Typography>
               <Typography variant="h1">Treat events like first-class records, not just tags on people.</Typography>
             </View>
-            <View style={styles.headerActions}>
-              <Button label="Add event" onPress={openCreateEvent} fullWidth={false} variant="ghost" />
-              <Button label="Log event contact" onPress={openGeneralCapture} fullWidth={false} />
+            <View style={[styles.headerActions, isCompactLayout ? styles.headerActionsCompact : null]}>
+              <Button
+                label="Add event"
+                onPress={openCreateEvent}
+                fullWidth={isCompactLayout}
+                variant="ghost"
+                style={isCompactLayout ? styles.headerActionButtonCompact : null}
+              />
+              <Button
+                label="Log event contact"
+                onPress={openGeneralCapture}
+                fullWidth={isCompactLayout}
+                style={isCompactLayout ? styles.headerActionButtonCompact : null}
+              />
             </View>
           </View>
 
@@ -640,6 +654,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     flexWrap: "wrap",
+  },
+  headerRowCompact: {
+    alignItems: "stretch",
+  },
+  headerActionsCompact: {
+    width: "100%",
+  },
+  headerActionButtonCompact: {
+    width: "100%",
   },
   headerCopy: {
     flex: 1,
