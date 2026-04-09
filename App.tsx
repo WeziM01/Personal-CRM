@@ -20,8 +20,8 @@ type ScreenKey = "home" | "event" | "person";
 export default function App() {
   const { user, isLoading } = useAuth();
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
-  const [authBanner, setAuthBanner] = useState<string | null>(null);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
+  const [isAccountMenuOpen, setAccountMenuOpen] = useState(false);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [screen, setScreen] = useState<ScreenKey>("home");
   const [personStatusMode, setPersonStatusMode] = useState<PersonStatusMode>("all");
@@ -90,7 +90,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <AuthScreen onAuthenticated={(message) => setAuthBanner(message)} />;
+    return <AuthScreen />;
   }
 
   async function handleSupportEmail(type: "bug" | "feature") {
@@ -140,6 +140,15 @@ export default function App() {
     setScreen("person");
   }
 
+  async function handleLogout() {
+    try {
+      await signOutCurrentUser();
+      await signInAsGuest();
+    } finally {
+      setAccountMenuOpen(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.topBar}>
@@ -156,7 +165,14 @@ export default function App() {
         <View style={styles.switcher}>
           <Button
             label={isGuest ? "Guest" : `@${currentUsername || "member"}`}
-            onPress={() => setAuthModalOpen(true)}
+            onPress={() => {
+              if (isGuest) {
+                setAuthModalOpen(true);
+                return;
+              }
+
+              setAccountMenuOpen(true);
+            }}
             variant="ghost"
             fullWidth={false}
             size="compact"
@@ -187,26 +203,6 @@ export default function App() {
             style={styles.switchButton}
           />
           <Button
-            label={isGuest ? "Login / Sign up" : "Log out"}
-            onPress={async () => {
-              if (isGuest) {
-                setAuthModalOpen(true);
-                return;
-              }
-
-              try {
-                await signOutCurrentUser();
-                await signInAsGuest();
-              } catch {
-                setAuthBanner("Logged out. Tap Login / Sign up to continue.");
-              }
-            }}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-            style={styles.switchButton}
-          />
-          <Button
             label="⚙️"
             onPress={() => setSettingsOpen(true)}
             variant="ghost"
@@ -216,18 +212,6 @@ export default function App() {
           />
         </View>
       </View>
-
-      {authBanner ? (
-        <View style={styles.authBannerRow}>
-          <Button
-            label={authBanner}
-            onPress={() => setAuthBanner(null)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-          />
-        </View>
-      ) : null}
 
       {isGuest ? (
         <View style={styles.currentEventBar}>
@@ -290,12 +274,26 @@ export default function App() {
         <AuthScreen
           canUseGuest={false}
           guestUserId={isGuest ? user.id : null}
-          onAuthenticated={(message) => {
-            setAuthBanner(message);
+          onAuthenticated={() => {
             setAuthModalOpen(false);
           }}
           onCancel={() => setAuthModalOpen(false)}
         />
+      </Modal>
+
+      <Modal visible={isAccountMenuOpen} transparent animationType="fade" onRequestClose={() => setAccountMenuOpen(false)}>
+        <View style={styles.accountMenuOverlay}>
+          <View style={styles.accountMenuCard}>
+            <Typography variant="caption">Signed in</Typography>
+            <Typography variant="h2">@{currentUsername || "member"}</Typography>
+            <Button label="Log out" onPress={handleLogout} />
+            <Button
+              label="Close"
+              onPress={() => setAccountMenuOpen(false)}
+              variant="ghost"
+            />
+          </View>
+        </View>
       </Modal>
 
       <Modal visible={isSettingsOpen} animationType="slide" presentationStyle="pageSheet">
@@ -349,10 +347,6 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
-  authBannerRow: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
   switchButton: {
     minHeight: 40,
   },
@@ -398,5 +392,22 @@ const styles = StyleSheet.create({
   settingsActions: {
     gap: 12,
     marginTop: 12,
+  },
+  accountMenuOverlay: {
+    flex: 1,
+    justifyContent: "flex-start",
+    alignItems: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.18)",
+    paddingTop: 64,
+    paddingHorizontal: 16,
+  },
+  accountMenuCard: {
+    width: 260,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 14,
+    gap: 10,
   },
 });
