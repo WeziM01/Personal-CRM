@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Modal, SafeAreaView, StyleSheet, TextInput, View } from "react-native";
+import { Modal, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
 
 import { EVENT_CATEGORY_OPTIONS, EventCategory, formatCategoryLabel } from "../lib/crm";
 import { colors, layout, radius } from "../theme/tokens";
@@ -21,6 +21,8 @@ type CurrentEventSheetProps = {
 };
 
 export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: CurrentEventSheetProps) {
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 720;
   const [name, setName] = useState("");
   const [category, setCategory] = useState<EventCategory>("networking");
 
@@ -42,7 +44,12 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.container}>
+        <ScrollView
+          style={styles.container}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
           <View style={styles.headerRow}>
             <Typography variant="h1">Set Event Mode</Typography>
             <Button label="Close" onPress={onClose} variant="ghost" fullWidth={false} size="compact" />
@@ -89,10 +96,10 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
           </Card>
 
           <View style={styles.footerButtons}>
-            <Button label="Save Current Event" onPress={handleSave} disabled={!name.trim()} />
-            <Button label="Past Event Mode" onPress={onClear} variant="ghost" />
+            <Button label={isCompactLayout ? "Save event" : "Save Current Event"} onPress={handleSave} disabled={!name.trim()} />
+            <Button label={isCompactLayout ? "Clear event" : "Past Event Mode"} onPress={onClear} variant="ghost" />
           </View>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </Modal>
   );
@@ -106,9 +113,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
     paddingTop: layout.stackGap,
-    paddingBottom: layout.stackGap,
+    paddingBottom: layout.stackGap * 2,
     gap: 18,
   },
   headerRow: {

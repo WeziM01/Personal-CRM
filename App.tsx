@@ -1,6 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
-import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View, useWindowDimensions } from "react-native";
+import { Alert, Linking, Modal, SafeAreaView, Share, StyleSheet, View, useWindowDimensions } from "react-native";
 
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
@@ -36,6 +36,8 @@ export default function App() {
   const previousWasGuest = useRef(false);
 
   const isGuest = Boolean(user?.is_anonymous);
+  const guestBannerLabel = isCompactLayout ? "Guest mode active" : "Guest mode active · data is temporary";
+  const updatesBannerLabel = isCompactLayout ? "Future updates" : "Sign up for future updates";
 
   if (supabaseConfigMessage) {
     return (
@@ -110,56 +112,42 @@ export default function App() {
     return <AuthScreen />;
   }
 
-  async function handleSupportEmail(type: "bug" | "feature") {
-    const subject = type === "bug" ? "Bug Report - Personal CRM MVP" : "Feature Request - Personal CRM MVP";
-    const body = type === "bug"
-      ? [
-          "What happened?",
-          "",
-          "What did you expect to happen?",
-          "",
-          "Steps to reproduce:",
-          "1. ",
-          "2. ",
-          "3. ",
-          "",
-          `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
-        ].join("\n")
-      : [
-          "What would you like the app to do?",
-          "",
-          "Why would it help?",
-          "",
-          "When would you use it?",
-          "",
-          `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
-        ].join("\n");
-
+  async function handleReportBug() {
+    const subject = "Bug Report - Personal CRM MVP";
+    const body = [
+      "What happened?",
+      "",
+      "What did you expect to happen?",
+      "",
+      "Steps to reproduce:",
+      "1. ",
+      "2. ",
+      "3. ",
+      "",
+      `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
+    ].join("\n");
     const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
     try {
-      const canOpen = await Linking.canOpenURL(url);
-      if (!canOpen) {
-        Alert.alert("No mail app found", "Set up a mail app on this device to send feedback.");
-        return;
-      }
-
       await Linking.openURL(url);
       setSettingsOpen(false);
     } catch {
-      Alert.alert("Could not open mail", "Please try again after setting a default mail app.");
+      try {
+        await Share.share({
+          title: subject,
+          message: `${subject}\n\n${body}`,
+        });
+        setSettingsOpen(false);
+      } catch {
+        Alert.alert("Could not open bug report", "Please try again in a moment.");
+      }
     }
   }
 
   async function handleOpenWaitlist() {
     try {
-      const canOpen = await Linking.canOpenURL(EARLY_ACCESS_WAITLIST_URL);
-      if (!canOpen) {
-        Alert.alert("Invalid waitlist link", "This waitlist URL cannot be opened on this device.");
-        return;
-      }
-
       await Linking.openURL(EARLY_ACCESS_WAITLIST_URL);
+      setSettingsOpen(false);
     } catch {
       Alert.alert("Unable to open link", "Please try again in a moment.");
     }
@@ -253,24 +241,24 @@ export default function App() {
       {isGuest ? (
         <View style={styles.currentEventBar}>
           <Button
-            label="Guest mode: data is temporary unless you create an account"
+            label={guestBannerLabel}
             onPress={() => setAuthModalOpen(true)}
             variant="ghost"
             fullWidth={false}
             size="compact"
           />
         </View>
-      ) : null}
-
-      <View style={styles.currentEventBar}>
-        <Button
-          label="Like what you see? Join the early access waitlist"
-          onPress={handleOpenWaitlist}
-          variant="ghost"
-          fullWidth={false}
-          size="compact"
-        />
-      </View>
+      ) : (
+        <View style={styles.currentEventBar}>
+          <Button
+            label={updatesBannerLabel}
+            onPress={handleOpenWaitlist}
+            variant="ghost"
+            fullWidth={false}
+            size="compact"
+          />
+        </View>
+      )}
 
       {currentEvent ? (
         <View style={styles.currentEventBar}>
@@ -354,8 +342,8 @@ export default function App() {
             </View>
 
             <View style={styles.settingsActions}>
-              <Button label="🐛 Report a Bug" onPress={() => handleSupportEmail("bug")} />
-              <Button label="💡 Suggest a Feature" onPress={() => handleSupportEmail("feature")} variant="ghost" />
+              <Button label="🐛 Report a Bug" onPress={handleReportBug} />
+              <Button label="💡 Suggest a Feature" onPress={handleOpenWaitlist} variant="ghost" />
             </View>
           </View>
         </SafeAreaView>

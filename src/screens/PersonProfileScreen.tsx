@@ -62,6 +62,7 @@ export function PersonProfileScreen({
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [draftPreviewPerson, setDraftPreviewPerson] = useState<(typeof people)[number] | null>(null);
+  const [isInteractionPickerOpen, setInteractionPickerOpen] = useState(false);
 
   const draftPreviewMessage = useMemo(() => {
     if (!draftPreviewPerson) {
@@ -183,30 +184,39 @@ export function PersonProfileScreen({
     setStatusMode(forcedStatusMode);
   }, [forcedStatusMode, forcedStatusNonce]);
 
+  function openCreateInteractionForPerson(person: (typeof people)[number]) {
+    setEditorMode("createInteraction");
+    setEditorDraft({
+      name: person.name,
+      priority: person.priority,
+      tags: person.tags,
+      company: person.company,
+      linkedinUrl: person.linkedinUrl,
+      phoneNumber: person.phoneNumber,
+      event: person.lastEventName || "",
+      notes: "",
+      followUp: person.followUp === "None yet" ? "" : person.followUp,
+    });
+    setCaptureOpen(true);
+  }
+
   function openCreateInteraction() {
-    if (!selectedPerson) {
-      Alert.alert(
-        "Select a contact first",
-        isCompactLayout
-          ? "Tap a contact row to expand it, then tap Add interaction."
-          : "No contact is selected yet."
-      );
+    if (selectedPerson) {
+      openCreateInteractionForPerson(selectedPerson);
       return;
     }
 
-    setEditorMode("createInteraction");
-    setEditorDraft({
-      name: selectedPerson.name,
-      priority: selectedPerson.priority,
-      tags: selectedPerson.tags,
-      company: selectedPerson.company,
-      linkedinUrl: selectedPerson.linkedinUrl,
-      phoneNumber: selectedPerson.phoneNumber,
-      event: selectedPerson.lastEventName || "",
-      notes: "",
-      followUp: selectedPerson.followUp === "None yet" ? "" : selectedPerson.followUp,
-    });
-    setCaptureOpen(true);
+    if (isCompactLayout) {
+      if (!filteredPeople.length) {
+        openCreatePerson("");
+        return;
+      }
+
+      setInteractionPickerOpen(true);
+      return;
+    }
+
+    Alert.alert("Select a contact first", "No contact is selected yet.");
   }
 
   function openCreatePerson(initialName = searchQuery.trim()) {
@@ -912,6 +922,55 @@ export function PersonProfileScreen({
           saveLabel={editorMode === "edit" ? "Save Changes" : editorMode === "createPerson" ? "Save Person" : "Save Interaction"}
         />
 
+        {isInteractionPickerOpen ? (
+          <View style={styles.confirmOverlay}>
+            <Pressable style={styles.confirmBackdrop} onPress={() => setInteractionPickerOpen(false)} />
+            <View style={styles.confirmCardWrap}>
+              <Card style={styles.confirmCard}>
+                <Typography variant="h2">Pick a contact</Typography>
+                <Typography variant="body" style={styles.confirmMeta}>
+                  Choose who this interaction should be saved against.
+                </Typography>
+                <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
+                  {filteredPeople.map((person) => (
+                    <Button
+                      key={person.id}
+                      label={person.name}
+                      variant="ghost"
+                      fullWidth={false}
+                      size="compact"
+                      onPress={() => {
+                        setSelectedPersonId(person.id);
+                        setInteractionPickerOpen(false);
+                        openCreateInteractionForPerson(person);
+                      }}
+                    />
+                  ))}
+                </ScrollView>
+                <View style={styles.confirmActions}>
+                  <Button
+                    label="Add person instead"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => {
+                      setInteractionPickerOpen(false);
+                      openCreatePerson("");
+                    }}
+                  />
+                  <Button
+                    label="Cancel"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => setInteractionPickerOpen(false)}
+                  />
+                </View>
+              </Card>
+            </View>
+          </View>
+        ) : null}
+
         {draftPreviewPerson ? (
           <View style={styles.confirmOverlay}>
             <Pressable style={styles.confirmBackdrop} onPress={() => setDraftPreviewPerson(null)} />
@@ -963,7 +1022,7 @@ export function PersonProfileScreen({
           <FloatingActionBar
             actions={[
               { label: "Add person", onPress: () => openCreatePerson(""), variant: "ghost" },
-              { label: "Add interaction", onPress: openCreateInteraction },
+              { label: selectedPerson ? "Add interaction" : "Pick contact", onPress: openCreateInteraction },
             ]}
           />
         ) : null}
@@ -1068,6 +1127,12 @@ const styles = StyleSheet.create({
   confirmActions: {
     flexDirection: "row",
     flexWrap: "wrap",
+    gap: 8,
+  },
+  pickerList: {
+    maxHeight: 260,
+  },
+  pickerListContent: {
     gap: 8,
   },
   compactPersonRow: {
