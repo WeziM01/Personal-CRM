@@ -13,6 +13,7 @@ import {
   createInteraction,
   createPerson,
   ensureSessionUserId,
+  formatPriorityLabel,
   formatCategoryLabel,
   getOrCreateEvent,
   isContactStale,
@@ -42,7 +43,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const followUpPeople = useMemo(
-    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip)).slice(0, 4),
+    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).slice(0, 4),
     [people]
   );
   const contactedTodayPeople = useMemo(
@@ -59,7 +60,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     }
 
     if (activeSignal === "needNudge") {
-      return people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip));
+      return people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority));
     }
 
     return recentPeople;
@@ -139,7 +140,8 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
         draft.company,
         draft.linkedinUrl,
         draft.phoneNumber,
-        draft.isVip
+        draft.priority,
+        draft.tags
       );
 
       let eventId: string | null = null;
@@ -224,7 +226,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                   onOpenPeopleFilter?.("stale");
                 }}
               >
-                <Typography variant="h2" style={styles.heroMetric}>{people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip)).length}</Typography>
+                <Typography variant="h2" style={styles.heroMetric}>{people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).length}</Typography>
                 <Typography variant="caption" style={styles.heroCaption}>Need a nudge</Typography>
               </Pressable>
             </View>
@@ -253,6 +255,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                       <Typography variant="caption">
                         {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
                       </Typography>
+                      <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                     </View>
                     <Typography variant="caption">{person.statusLabel}</Typography>
                   </View>
@@ -284,6 +287,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                     <Typography variant="caption">
                       {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
                     </Typography>
+                    <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                   </View>
                   <Typography variant="caption">{person.statusLabel}</Typography>
                 </View>
@@ -311,6 +315,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                   <View style={styles.connectionMain}>
                     <Typography variant="h2">{person.name}</Typography>
                     {person.company ? <Typography variant="caption">{person.company}</Typography> : null}
+                    <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                   </View>
                   <Typography variant="caption">{person.bannerLabel}</Typography>
                 </View>

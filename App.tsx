@@ -1,5 +1,5 @@
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View, useWindowDimensions } from "react-native";
 
 import { Typography } from "./src/components/ui/Typography";
@@ -17,6 +17,8 @@ import { colors } from "./src/theme/tokens";
 
 type ScreenKey = "home" | "event" | "person";
 
+const EARLY_ACCESS_WAITLIST_URL = "https://tally.so/r/xXPNkd";
+
 export default function App() {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 880;
@@ -31,6 +33,7 @@ export default function App() {
   const [personStatusNonce, setPersonStatusNonce] = useState(0);
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
+  const previousWasGuest = useRef(false);
 
   const isGuest = Boolean(user?.is_anonymous);
 
@@ -80,6 +83,17 @@ export default function App() {
     return () => {
       isMounted = false;
     };
+  }, [user]);
+
+  useEffect(() => {
+    const isGuest = Boolean(user?.is_anonymous);
+
+    if (previousWasGuest.current && user && !isGuest) {
+      setAuthModalOpen(false);
+      setAccountMenuOpen(false);
+    }
+
+    previousWasGuest.current = isGuest;
   }, [user]);
 
   if (isLoading) {
@@ -134,6 +148,20 @@ export default function App() {
       setSettingsOpen(false);
     } catch {
       Alert.alert("Could not open mail", "Please try again after setting a default mail app.");
+    }
+  }
+
+  async function handleOpenWaitlist() {
+    try {
+      const canOpen = await Linking.canOpenURL(EARLY_ACCESS_WAITLIST_URL);
+      if (!canOpen) {
+        Alert.alert("Invalid waitlist link", "This waitlist URL cannot be opened on this device.");
+        return;
+      }
+
+      await Linking.openURL(EARLY_ACCESS_WAITLIST_URL);
+    } catch {
+      Alert.alert("Unable to open link", "Please try again in a moment.");
     }
   }
 
@@ -233,6 +261,16 @@ export default function App() {
           />
         </View>
       ) : null}
+
+      <View style={styles.currentEventBar}>
+        <Button
+          label="Like what you see? Join the early access waitlist"
+          onPress={handleOpenWaitlist}
+          variant="ghost"
+          fullWidth={false}
+          size="compact"
+        />
+      </View>
 
       {currentEvent ? (
         <View style={styles.currentEventBar}>

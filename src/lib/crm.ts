@@ -9,6 +9,8 @@ export type PersonRow = {
   linkedin_url: string | null;
   name: string | null;
   phone_number: string | null;
+  priority: PersonPriority;
+  tags: string[];
   created_at: string;
 };
 
@@ -40,13 +42,16 @@ export type EventCategory =
   | "community"
   | "other";
 
+export type PersonPriority = "high" | "medium" | "low";
+
 export type PersonInsight = {
   id: string;
   name: string;
-  isVip: boolean;
+  priority: PersonPriority;
   company: string;
   linkedinUrl: string;
   phoneNumber: string;
+  tags: string[];
   createdAt: string;
   interactionCount: number;
   lastInteractionId: string | null;
@@ -77,7 +82,18 @@ export const FAST_REMINDER_DEMO_MODE = true;
 export const STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 45 : 14;
 export const RECENT_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
 export const JUST_CONNECTED_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 10 : 0;
-export const VIP_STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
+export const HIGH_PRIORITY_STALE_THRESHOLD = JUST_CONNECTED_THRESHOLD;
+
+export const PERSON_TAG_SUGGESTIONS = [
+  "investor",
+  "founder",
+  "corporate",
+  "charity",
+  "operator",
+  "advisor",
+  "creator",
+  "community",
+] as const;
 
 export const EVENT_CATEGORY_OPTIONS: Array<{ label: string; value: EventCategory | "all" }> = [
   { label: "All", value: "all" },
@@ -139,6 +155,28 @@ function assertNoError(error: PostgrestError | null) {
   if (error) {
     throw new Error(error.message);
   }
+}
+
+export function normalizePriority(priority?: string | null, isVip?: boolean) {
+  if (priority === "high" || priority === "medium" || priority === "low") {
+    return priority;
+  }
+
+  return isVip ? "high" : "medium";
+}
+
+export function normalizeTags(tags?: string[] | null) {
+  if (!tags?.length) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      tags
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
 }
 
 export async function ensureSessionUserId() {
@@ -203,9 +241,11 @@ export async function createPerson(
   company?: string,
   linkedinUrl?: string,
   phoneNumber?: string,
-  isVip = false
+  priority: PersonPriority = "medium",
+  tags: string[] = []
 ) {
   const client = assertClient();
+  const normalizedTags = normalizeTags(tags);
 
   const { data, error } = await client
     .from("persons")
@@ -213,11 +253,13 @@ export async function createPerson(
       user_id: userId,
       name: name.trim() || null,
       company: company?.trim() || null,
-      is_vip: isVip,
+      is_vip: priority === "high",
       linkedin_url: normalizeLinkedInUrl(linkedinUrl),
       phone_number: normalizePhoneNumber(phoneNumber),
+      priority,
+      tags: normalizedTags,
     })
-    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,phone_number,priority,tags,created_at")
     .single();
 
   assertNoError(error);
@@ -249,18 +291,23 @@ export async function updatePersonDetails(input: {
   company?: string;
   linkedinUrl?: string;
   phoneNumber?: string;
-  isVip?: boolean;
+  priority?: PersonPriority;
+  tags?: string[];
 }) {
   const client = assertClient();
+  const normalizedPriority = input.priority || "medium";
+  const normalizedTags = normalizeTags(input.tags);
 
   const { error } = await client
     .from("persons")
     .update({
       name: input.name.trim() || null,
       company: input.company?.trim() || null,
-      is_vip: input.isVip,
+      is_vip: normalizedPriority === "high",
       linkedin_url: normalizeLinkedInUrl(input.linkedinUrl),
       phone_number: normalizePhoneNumber(input.phoneNumber),
+      priority: normalizedPriority,
+      tags: normalizedTags,
     })
     .eq("user_id", input.userId)
     .eq("id", input.personId);
@@ -350,7 +397,7 @@ export async function listRecentPeople(userId: string, limit = 8) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,phone_number,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -426,7 +473,7 @@ export async function getFirstPerson(userId: string) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,phone_number,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -455,14 +502,17 @@ export async function listPeopleInsights(userId: string) {
     const daysSinceLastContact = lastInteraction
       ? getDaysSince(lastInteraction.created_at)
       : null;
+    const priority = normalizePriority(person.priority, person.is_vip);
+    const tags = normalizeTags(person.tags);
 
     return {
       id: person.id,
       name: person.name || "Unknown contact",
-      isVip: Boolean(person.is_vip),
+      priority,
       company: person.company || extractCompany(lastInteraction?.raw_note || ""),
       linkedinUrl: person.linkedin_url || "",
       phoneNumber: person.phone_number || "",
+      tags,
       createdAt: person.created_at,
       interactionCount: personInteractions.length,
       lastInteractionId: lastInteraction?.id || null,
@@ -476,8 +526,8 @@ export async function listPeopleInsights(userId: string) {
       ),
       followUp: extractFollowUp(lastInteraction?.raw_note || ""),
       daysSinceLastContact,
-      statusLabel: buildContactStatus(daysSinceLastContact, Boolean(person.is_vip)),
-      bannerLabel: buildContactBanner(daysSinceLastContact, Boolean(person.is_vip)),
+      statusLabel: buildContactStatus(daysSinceLastContact, priority),
+      bannerLabel: buildContactBanner(daysSinceLastContact, priority),
     } as PersonInsight;
   });
 }
@@ -657,9 +707,13 @@ export function getDaysSince(value: string) {
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
 }
 
-export function buildContactStatus(daysSinceLastContact: number | null, isVip = false) {
+export function buildContactStatus(daysSinceLastContact: number | null, priority: PersonPriority = "medium") {
   if (daysSinceLastContact === null) {
     return "No contact yet";
+  }
+
+  if (priority === "low") {
+    return "Low priority";
   }
 
   if (daysSinceLastContact <= JUST_CONNECTED_THRESHOLD) {
@@ -667,19 +721,23 @@ export function buildContactStatus(daysSinceLastContact: number | null, isVip = 
   }
 
   if (daysSinceLastContact <= RECENT_CONTACT_THRESHOLD) {
-    return "Recently connected";
+    return priority === "high" ? "High priority" : "Recently connected";
   }
 
-  if (daysSinceLastContact <= getStaleThreshold(isVip)) {
+  if (!isContactStale(daysSinceLastContact, priority)) {
     return "Cooling";
   }
 
-  return "Needs follow-up";
+  return priority === "high" ? "Needs same-day follow-up" : "Needs follow-up";
 }
 
-export function buildContactBanner(daysSinceLastContact: number | null, isVip = false) {
+export function buildContactBanner(daysSinceLastContact: number | null, priority: PersonPriority = "medium") {
   if (daysSinceLastContact === null) {
     return "No contact on record yet";
+  }
+
+  if (priority === "low") {
+    return "Low priority: no nudge scheduled";
   }
 
   if (daysSinceLastContact <= JUST_CONNECTED_THRESHOLD) {
@@ -691,8 +749,10 @@ export function buildContactBanner(daysSinceLastContact: number | null, isVip = 
       return "Last connected 1 second ago";
     }
 
-    if (daysSinceLastContact >= getStaleThreshold(isVip)) {
-      return `Priority nudge: ${daysSinceLastContact}s since contact`;
+    if (isContactStale(daysSinceLastContact, priority)) {
+      return priority === "high"
+        ? `Same-day nudge: ${daysSinceLastContact}s since contact`
+        : `Priority nudge: ${daysSinceLastContact}s since contact`;
     }
 
     return `Haven't connected in ${daysSinceLastContact} seconds`;
@@ -702,23 +762,50 @@ export function buildContactBanner(daysSinceLastContact: number | null, isVip = 
     return "Last connected 1 day ago";
   }
 
-  if (daysSinceLastContact >= getStaleThreshold(isVip)) {
-    return `Priority nudge: ${daysSinceLastContact} days since contact`;
+  if (isContactStale(daysSinceLastContact, priority)) {
+    return priority === "high"
+      ? `Same-day nudge: ${daysSinceLastContact} days since contact`
+      : `Priority nudge: ${daysSinceLastContact} days since contact`;
   }
 
   return `Haven't connected in ${daysSinceLastContact} days`;
 }
 
-export function getStaleThreshold(isVip: boolean) {
-  return isVip ? VIP_STALE_CONTACT_THRESHOLD : STALE_CONTACT_THRESHOLD;
+export function getStaleThreshold(priority: PersonPriority) {
+  if (priority === "high") {
+    return HIGH_PRIORITY_STALE_THRESHOLD;
+  }
+
+  if (priority === "low") {
+    return null;
+  }
+
+  return STALE_CONTACT_THRESHOLD;
 }
 
-export function isContactStale(daysSinceLastContact: number | null, isVip: boolean) {
+export function isContactStale(daysSinceLastContact: number | null, priority: PersonPriority) {
   if (daysSinceLastContact === null) {
     return false;
   }
 
-  return daysSinceLastContact >= getStaleThreshold(isVip);
+  const threshold = getStaleThreshold(priority);
+  if (threshold === null) {
+    return false;
+  }
+
+  return daysSinceLastContact >= threshold;
+}
+
+export function formatPriorityLabel(priority: PersonPriority) {
+  if (priority === "high") {
+    return "High priority";
+  }
+
+  if (priority === "low") {
+    return "Low priority";
+  }
+
+  return "Medium priority";
 }
 
 export function buildReconnectDraft(input: {

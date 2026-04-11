@@ -111,9 +111,12 @@ async function importGuestSnapshot(targetUserId: string, snapshot: GuestSnapshot
         user_id: targetUserId,
         name: person.name,
         company: person.company,
+        is_vip: person.is_vip,
         linkedin_url: person.linkedin_url,
         phone_number: person.phone_number,
         photo_url: person.photo_url,
+        priority: person.priority,
+        tags: person.tags,
       })
       .select("id")
       .single();

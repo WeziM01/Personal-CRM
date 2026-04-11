@@ -75,8 +75,10 @@ export type Database = {
 					is_vip: boolean;
 						linkedin_url: string | null;
 					name: string | null;
+					priority: string;
 						phone_number: string | null;
 					photo_url: string | null;
+					tags: string[];
 					user_id: string;
 				};
 				Insert: {
@@ -86,8 +88,10 @@ export type Database = {
 					is_vip?: boolean;
 						linkedin_url?: string | null;
 					name?: string | null;
+					priority?: string;
 						phone_number?: string | null;
 					photo_url?: string | null;
+					tags?: string[];
 					user_id: string;
 				};
 				Update: {
@@ -97,8 +101,10 @@ export type Database = {
 					is_vip?: boolean;
 						linkedin_url?: string | null;
 					name?: string | null;
+					priority?: string;
 						phone_number?: string | null;
 					photo_url?: string | null;
+					tags?: string[];
 					user_id?: string;
 				};
 				Relationships: [

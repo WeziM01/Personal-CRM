@@ -12,6 +12,7 @@ import {
 } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
+import { FloatingActionBar } from "../components/FloatingActionBar";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -24,6 +25,7 @@ import {
   deleteEvent,
   ensureSessionUserId,
   formatCategoryLabel,
+  formatPriorityLabel,
   getOrCreateEvent,
   listAllInteractions,
   listEventInsights,
@@ -313,7 +315,8 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         draft.company,
         draft.linkedinUrl,
         draft.phoneNumber,
-        draft.isVip
+        draft.priority,
+        draft.tags
       );
       let linkedEventId: string | null = null;
       const eventName = currentEvent?.name || draft.event;
@@ -356,21 +359,19 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               <Typography variant="caption">Events</Typography>
               <Typography variant="h1">Treat events like first-class records, not just tags on people.</Typography>
             </View>
-            <View style={[styles.headerActions, isCompactLayout ? styles.headerActionsCompact : null]}>
+            {!isCompactLayout ? <View style={styles.headerActions}>
               <Button
                 label="Add event"
                 onPress={openCreateEvent}
-                fullWidth={isCompactLayout}
+                fullWidth={false}
                 variant="ghost"
-                style={isCompactLayout ? styles.headerActionButtonCompact : null}
               />
               <Button
                 label="Log event contact"
                 onPress={openGeneralCapture}
-                fullWidth={isCompactLayout}
-                style={isCompactLayout ? styles.headerActionButtonCompact : null}
+                fullWidth={false}
               />
-            </View>
+            </View> : null}
           </View>
 
           <Card>
@@ -537,6 +538,8 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                     <Typography variant="caption">
                       {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                     </Typography>
+                    <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
+                    {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                   </View>
                   <Typography variant="caption">{person.bannerLabel}</Typography>
                 </View>
@@ -566,6 +569,15 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           title="Log Event Contact"
           saveLabel="Save Event Contact"
         />
+
+        {isCompactLayout ? (
+          <FloatingActionBar
+            actions={[
+              { label: "Add event", onPress: openCreateEvent, variant: "ghost" },
+              { label: "Log contact", onPress: openGeneralCapture },
+            ]}
+          />
+        ) : null}
 
         <Modal visible={isEventEditorOpen} animationType="slide" presentationStyle="pageSheet">
           <SafeAreaView style={styles.safeArea}>
@@ -640,7 +652,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
     paddingTop: layout.stackGap,
-    paddingBottom: 48,
+    paddingBottom: 132,
     gap: 18,
   },
   headerRow: {
@@ -657,12 +669,6 @@ const styles = StyleSheet.create({
   },
   headerRowCompact: {
     alignItems: "stretch",
-  },
-  headerActionsCompact: {
-    width: "100%",
-  },
-  headerActionButtonCompact: {
-    width: "100%",
   },
   headerCopy: {
     flex: 1,

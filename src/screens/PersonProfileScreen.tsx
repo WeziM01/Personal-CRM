@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, Linking, SafeAreaView, ScrollView, Share, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
+import { FloatingActionBar } from "../components/FloatingActionBar";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
 import {
   EVENT_CATEGORY_OPTIONS,
+  PERSON_TAG_SUGGESTIONS,
+  PersonPriority,
   buildReconnectDraft,
   JUST_CONNECTED_THRESHOLD,
   RECENT_CONTACT_THRESHOLD,
@@ -16,6 +19,7 @@ import {
   createPerson,
   deletePerson,
   ensureSessionUserId,
+  formatPriorityLabel,
   getOrCreateEvent,
   listPeopleInsights,
   markPersonContactedToday,
@@ -27,6 +31,7 @@ import {
 import { colors, layout } from "../theme/tokens";
 
 type SortMode = "recent" | "stale" | "name" | "frequency";
+type CaptureMode = "createInteraction" | "createPerson" | "edit";
 export type PersonStatusMode = "all" | "today" | "recent" | "stale";
 
 type PersonProfileScreenProps = {
@@ -46,16 +51,30 @@ export function PersonProfileScreen({
   const [isSaving, setSaving] = useState(false);
   const [isDeleting, setDeleting] = useState(false);
   const [deleteArmedPersonId, setDeleteArmedPersonId] = useState<string | null>(null);
-  const [editorMode, setEditorMode] = useState<"create" | "edit">("create");
+  const [editorMode, setEditorMode] = useState<CaptureMode>("createInteraction");
   const [editorDraft, setEditorDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
-  const [sortMode, setSortMode] = useState<SortMode>("recent");
+  const [sortMode, setSortMode] = useState<SortMode>("name");
   const [statusMode, setStatusMode] = useState<PersonStatusMode>("all");
   const [categoryMode, setCategoryMode] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
+  const [selectedTag, setSelectedTag] = useState<string>("all");
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const availableTags = useMemo(() => {
+    return Array.from(new Set([...PERSON_TAG_SUGGESTIONS, ...people.flatMap((person) => person.tags)])).sort();
+  }, [people]);
+
+  const sortLabel =
+    sortMode === "name"
+      ? "A-Z"
+      : sortMode === "recent"
+        ? "Recent"
+        : sortMode === "stale"
+          ? "Need nudge first"
+          : "Most logged";
 
   const filteredPeople = useMemo(() => {
     const statusFiltered = people.filter((person) => {
@@ -68,7 +87,7 @@ export function PersonProfileScreen({
       }
 
       if (statusMode === "stale") {
-        return isContactStale(person.daysSinceLastContact, person.isVip);
+        return isContactStale(person.daysSinceLastContact, person.priority);
       }
 
       return true;
@@ -78,11 +97,15 @@ export function PersonProfileScreen({
       (person) => categoryMode === "all" || person.lastEventCategory === categoryMode
     );
 
+    const tagFiltered = categoryFiltered.filter(
+      (person) => selectedTag === "all" || person.tags.includes(selectedTag)
+    );
+
     const query = searchQuery.trim().toLowerCase();
     const searchedPeople = !query
-      ? categoryFiltered
-      : categoryFiltered.filter((person) =>
-          [person.name, person.company, person.lastInteractionNote, person.followUp, person.lastEventName || ""]
+      ? tagFiltered
+      : tagFiltered.filter((person) =>
+          [person.name, person.company, person.lastInteractionNote, person.followUp, person.lastEventName || "", person.tags.join(" ")]
             .join(" ")
             .toLowerCase()
             .includes(query)
@@ -105,7 +128,7 @@ export function PersonProfileScreen({
       const rightValue = right.lastInteractionAt || right.createdAt;
       return rightValue.localeCompare(leftValue);
     });
-  }, [categoryMode, people, searchQuery, sortMode, statusMode]);
+  }, [categoryMode, people, searchQuery, selectedTag, sortMode, statusMode]);
 
   const selectedPerson = useMemo(() => {
     return (
@@ -150,21 +173,39 @@ export function PersonProfileScreen({
   }, [forcedStatusMode, forcedStatusNonce]);
 
   function openCreateInteraction() {
-    setEditorMode("create");
+    setEditorMode("createInteraction");
     setEditorDraft(
       selectedPerson
         ? {
             name: selectedPerson.name,
-            isVip: selectedPerson.isVip,
+            priority: selectedPerson.priority,
+            tags: selectedPerson.tags,
             company: selectedPerson.company,
-          linkedinUrl: selectedPerson.linkedinUrl,
-          phoneNumber: selectedPerson.phoneNumber,
+            linkedinUrl: selectedPerson.linkedinUrl,
+            phoneNumber: selectedPerson.phoneNumber,
             event: selectedPerson.lastEventName || "",
             notes: "",
             followUp: selectedPerson.followUp === "None yet" ? "" : selectedPerson.followUp,
           }
         : null
     );
+    setCaptureOpen(true);
+  }
+
+  function openCreatePerson(initialName = searchQuery.trim()) {
+    setEditorMode("createPerson");
+    setEditorDraft({
+      name: initialName,
+      priority: "medium",
+      tags: [],
+      company: "",
+      linkedinUrl: "",
+      phoneNumber: "",
+      event: currentEvent?.name || "",
+      eventCategory: currentEvent?.category || "",
+      notes: "",
+      followUp: "",
+    });
     setCaptureOpen(true);
   }
 
@@ -175,17 +216,7 @@ export function PersonProfileScreen({
     }
 
     setSelectedPersonId(null);
-    setEditorMode("create");
-    setEditorDraft({
-      name: nameFromSearch,
-      isVip: false,
-      company: "",
-      event: currentEvent?.name || "",
-      eventCategory: currentEvent?.category || "",
-      notes: "",
-      followUp: "",
-    });
-    setCaptureOpen(true);
+    openCreatePerson(nameFromSearch);
   }
 
   function openEditPerson(person = selectedPerson) {
@@ -197,7 +228,8 @@ export function PersonProfileScreen({
     setEditorMode("edit");
     setEditorDraft({
       name: person.name,
-      isVip: person.isVip,
+      priority: person.priority,
+      tags: person.tags,
       company: person.company,
       linkedinUrl: person.linkedinUrl,
       phoneNumber: person.phoneNumber,
@@ -222,7 +254,8 @@ export function PersonProfileScreen({
           userId,
           personId: selectedPerson.id,
           name: draft.name,
-          isVip: draft.isVip,
+          priority: draft.priority,
+          tags: draft.tags,
           company: draft.company,
           linkedinUrl: draft.linkedinUrl,
           phoneNumber: draft.phoneNumber,
@@ -258,22 +291,41 @@ export function PersonProfileScreen({
         return;
       }
 
-      const activePersonId =
-        selectedPerson?.id ||
-        (await createPerson(
+      let activePersonId = selectedPerson?.id || null;
+      if (editorMode === "createPerson" || !selectedPerson) {
+        activePersonId = (
+          await createPerson(
+            userId,
+            draft.name === "Unknown contact" ? "New Person" : draft.name,
+            draft.company,
+            draft.linkedinUrl,
+            draft.phoneNumber,
+            draft.priority,
+            draft.tags
+          )
+        ).id;
+      } else {
+        await updatePersonDetails({
           userId,
-          draft.name === "Unknown contact" ? "New Person" : draft.name,
-          draft.company,
-          draft.linkedinUrl,
-          draft.phoneNumber,
-          draft.isVip
-        )).id;
+          personId: selectedPerson.id,
+          name: draft.name,
+          company: draft.company,
+          linkedinUrl: draft.linkedinUrl,
+          phoneNumber: draft.phoneNumber,
+          priority: draft.priority,
+          tags: draft.tags,
+        });
+      }
 
       let eventId: string | null = null;
       const eventName = currentEvent?.name || draft.event;
       const eventCategory = currentEvent?.category || draft.eventCategory || null;
       if (eventName && eventName !== "No event") {
         eventId = (await getOrCreateEvent(userId, eventName, eventCategory)).id;
+      }
+
+      if (!activePersonId) {
+        throw new Error("Unable to determine which contact to save this interaction for.");
       }
 
       await createInteraction({
@@ -406,7 +458,7 @@ export function PersonProfileScreen({
     }
   }
 
-  async function handleToggleVip() {
+  async function handleUpdatePriority(priority: PersonPriority) {
     if (!selectedPerson) {
       return;
     }
@@ -420,10 +472,11 @@ export function PersonProfileScreen({
         company: selectedPerson.company,
         linkedinUrl: selectedPerson.linkedinUrl,
         phoneNumber: selectedPerson.phoneNumber,
-        isVip: !selectedPerson.isVip,
+        priority,
+        tags: selectedPerson.tags,
       });
       await loadProfileData();
-      Alert.alert("Updated", !selectedPerson.isVip ? `${selectedPerson.name} marked as a lead.` : `${selectedPerson.name} is now a normal contact.`);
+      Alert.alert("Updated", `${selectedPerson.name} is now ${formatPriorityLabel(priority).toLowerCase()}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update priority.";
       Alert.alert("Update failed", message);
@@ -439,12 +492,12 @@ export function PersonProfileScreen({
               <Typography variant="caption">People</Typography>
               <Typography variant="h1">Your live contact ledger, sorted by warmth and context.</Typography>
             </View>
-            <Button
-              label="Add interaction"
-              onPress={openCreateInteraction}
-              fullWidth={isCompactLayout}
-              style={isCompactLayout ? styles.headerActionButtonCompact : null}
-            />
+            {!isCompactLayout ? (
+              <View style={styles.headerActions}>
+                <Button label="Add person" onPress={() => openCreatePerson("")} variant="ghost" fullWidth={false} />
+                <Button label="Add interaction" onPress={openCreateInteraction} fullWidth={false} />
+              </View>
+            ) : null}
           </View>
 
           <Card>
@@ -515,7 +568,7 @@ export function PersonProfileScreen({
                 size="compact"
               />
               <Button
-                label="Name"
+                label="A-Z"
                 onPress={() => setSortMode("name")}
                 variant={sortMode === "name" ? "primary" : "ghost"}
                 fullWidth={false}
@@ -534,7 +587,7 @@ export function PersonProfileScreen({
               Search
             </Typography>
             <TextInput
-              placeholder="Search name, company, notes, follow-up"
+              placeholder="Search name, company, notes, follow-up, tags"
               placeholderTextColor={colors.textTertiary}
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -542,30 +595,72 @@ export function PersonProfileScreen({
               autoCapitalize="none"
               autoCorrect={false}
             />
+
+            <Typography variant="caption" style={styles.subSectionLabel}>
+              Tags
+            </Typography>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+              <Button
+                label="All tags"
+                onPress={() => setSelectedTag("all")}
+                variant={selectedTag === "all" ? "primary" : "ghost"}
+                fullWidth={false}
+                size="compact"
+              />
+              {availableTags.map((tag) => (
+                <Button
+                  key={tag}
+                  label={tag}
+                  onPress={() => setSelectedTag(tag)}
+                  variant={selectedTag === tag ? "primary" : "ghost"}
+                  fullWidth={false}
+                  size="compact"
+                />
+              ))}
+            </ScrollView>
           </Card>
 
           {selectedPerson ? (
             <Card style={styles.featureCard}>
               <Typography variant="caption">Selected contact</Typography>
-              <Typography variant="h1">{selectedPerson.isVip ? "⭐ " : ""}{selectedPerson.name}</Typography>
+              <Typography variant="h1">{selectedPerson.name}</Typography>
               <Typography variant="body" style={styles.featureBody}>
                 {selectedPerson.bannerLabel} · {selectedPerson.interactionCount} logged moments · {selectedPerson.lastEventName || "No event yet"}
               </Typography>
+              <Typography variant="caption">{formatPriorityLabel(selectedPerson.priority)}</Typography>
               {selectedPerson.company ? (
                 <Typography variant="caption">{selectedPerson.company}</Typography>
               ) : null}
+              {selectedPerson.tags.length ? (
+                <View style={styles.tagPillRow}>
+                  {selectedPerson.tags.map((tag) => (
+                    <View key={tag} style={styles.tagPill}>
+                      <Typography variant="caption">{tag}</Typography>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
               {searchQuery ? <Typography variant="caption">Search: {searchQuery}</Typography> : null}
+
+              <View style={styles.prioritySelector}>
+                <Typography variant="caption">Priority</Typography>
+                <View style={styles.prioritySelectorButtons}>
+                  {(["high", "medium", "low"] as PersonPriority[]).map((priority) => (
+                    <Button
+                      key={priority}
+                      label={priority.charAt(0).toUpperCase() + priority.slice(1)}
+                      onPress={() => handleUpdatePriority(priority)}
+                      variant={selectedPerson.priority === priority ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  ))}
+                </View>
+              </View>
 
               <View style={styles.actionRow}>
                 <Button label="Draft Message" onPress={handleDraftMessage} fullWidth={false} size="compact" />
                 <Button label="Copy / Share" onPress={handleCopyMessage} variant="ghost" fullWidth={false} size="compact" />
-                <Button
-                  label={selectedPerson.isVip ? "⭐ Unstar lead" : "⭐ Star lead"}
-                  onPress={handleToggleVip}
-                  variant="ghost"
-                  fullWidth={false}
-                  size="compact"
-                />
                 {selectedPerson.linkedinUrl ? (
                   <Button
                     label="Open LinkedIn"
@@ -613,7 +708,7 @@ export function PersonProfileScreen({
           <View style={styles.timelineHeader}>
             <Typography variant="caption">All connections</Typography>
             <Typography variant="body" style={styles.timelineCount}>
-              {filteredPeople.length} people in view
+              {filteredPeople.length} people in view ({sortLabel}{selectedTag !== "all" ? ` · ${selectedTag}` : ""})
             </Typography>
           </View>
 
@@ -629,10 +724,11 @@ export function PersonProfileScreen({
                 <View style={styles.rowTop}>
                   <View style={styles.personCopy}>
                     <Typography variant="h2">{person.name}</Typography>
-                    {person.isVip ? <Typography variant="caption">⭐ Starred lead</Typography> : null}
+                    <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                     <Typography variant="caption">
                       {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                     </Typography>
+                    {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                   </View>
                   <Button
                     label={person.id === selectedPerson?.id ? "Editing" : "Edit"}
@@ -649,7 +745,7 @@ export function PersonProfileScreen({
 
                 <View style={styles.metaRow}>
                   <Typography variant="caption">{person.bannerLabel}</Typography>
-                  {isContactStale(person.daysSinceLastContact, person.isVip) ? <Typography variant="caption">Need a nudge</Typography> : null}
+                  {isContactStale(person.daysSinceLastContact, person.priority) ? <Typography variant="caption">Need a nudge</Typography> : null}
                   <Typography variant="caption">{person.interactionCount} notes</Typography>
                 </View>
               </Card>
@@ -678,10 +774,19 @@ export function PersonProfileScreen({
           onSave={handleSaveInteraction}
           isSaving={isSaving}
           initialDraft={editorDraft}
-          lockedEvent={editorMode === "create" ? currentEvent : null}
-          title={editorMode === "edit" ? "Edit Contact" : "Add Interaction"}
-          saveLabel={editorMode === "edit" ? "Save Changes" : "Save Interaction"}
+          lockedEvent={editorMode === "edit" ? null : currentEvent}
+          title={editorMode === "edit" ? "Edit Contact" : editorMode === "createPerson" ? "Add Person" : "Add Interaction"}
+          saveLabel={editorMode === "edit" ? "Save Changes" : editorMode === "createPerson" ? "Save Person" : "Save Interaction"}
         />
+
+        {isCompactLayout ? (
+          <FloatingActionBar
+            actions={[
+              { label: "Add person", onPress: () => openCreatePerson(""), variant: "ghost" },
+              { label: "Add interaction", onPress: openCreateInteraction },
+            ]}
+          />
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -699,7 +804,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
     paddingTop: layout.stackGap,
-    paddingBottom: 56,
+    paddingBottom: 132,
     gap: 18,
   },
   headerRow: {
@@ -712,6 +817,11 @@ const styles = StyleSheet.create({
   headerCopy: {
     flex: 1,
     gap: 8,
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
   },
   headerRowCompact: {
     alignItems: "stretch",
@@ -754,6 +864,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
+  },
+  prioritySelector: {
+    gap: 10,
+  },
+  prioritySelectorButtons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  tagPillRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  tagPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   armedDeleteButton: {
     borderColor: colors.destructive,
@@ -799,7 +930,7 @@ const styles = StyleSheet.create({
   },
   metaRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 12,
   },

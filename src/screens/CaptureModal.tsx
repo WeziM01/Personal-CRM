@@ -6,18 +6,27 @@ import {
 	ScrollView,
 	StyleSheet,
 	TextInput,
+	useWindowDimensions,
 	View,
 } from "react-native";
 
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
-import { EVENT_CATEGORY_OPTIONS, EventCategory, formatCategoryLabel } from "../lib/crm";
+import {
+	EVENT_CATEGORY_OPTIONS,
+	EventCategory,
+	formatCategoryLabel,
+	formatPriorityLabel,
+	PERSON_TAG_SUGGESTIONS,
+	PersonPriority,
+} from "../lib/crm";
 import { colors, layout, radius } from "../theme/tokens";
 
 export type ParsedPersonDraft = {
 	name: string;
-	isVip: boolean;
+	priority: PersonPriority;
+	tags: string[];
 	company: string;
 	linkedinUrl: string;
 	phoneNumber: string;
@@ -30,7 +39,8 @@ export type ParsedPersonDraft = {
 
 const emptyDraft: ParsedPersonDraft = {
 	name: "",
-	isVip: false,
+	priority: "medium",
+	tags: [],
 	company: "",
 	linkedinUrl: "",
 	phoneNumber: "",
@@ -40,6 +50,12 @@ const emptyDraft: ParsedPersonDraft = {
 	followUp: "",
 	rawInput: "",
 };
+
+const priorityOptions: Array<{ label: string; value: PersonPriority; helper: string }> = [
+	{ label: "High", value: "high", helper: "Same-day nudge and included in Need a nudge." },
+	{ label: "Medium", value: "medium", helper: "Follow up after 14 days." },
+	{ label: "Low", value: "low", helper: "No nudge, but still searchable." },
+];
 
 export type LockedEventDraft = {
 	name: string;
@@ -81,6 +97,8 @@ export function CaptureModal({
 	initialDraft,
 	lockedEvent,
 }: CaptureModalProps) {
+	const { width } = useWindowDimensions();
+	const isCompactLayout = width < 720;
 	const [draft, setDraft] = useState<ParsedPersonDraft>(emptyDraft);
 	const [showContactLinks, setShowContactLinks] = useState(false);
 
@@ -88,8 +106,6 @@ export function CaptureModal({
 		if (visible) {
 			setDraft({
 				...emptyDraft,
-				event: lockedEvent?.name || "",
-				eventCategory: lockedEvent?.category || "",
 				...initialDraft,
 				event: lockedEvent?.name || initialDraft?.event || "",
 				eventCategory: lockedEvent?.category || initialDraft?.eventCategory || "",
@@ -100,6 +116,7 @@ export function CaptureModal({
 	}, [initialDraft, lockedEvent, visible]);
 
 	const sentencePreview = useMemo(() => buildDraftSentence(draft), [draft]);
+  const priorityHelper = priorityOptions.find((option) => option.value === draft.priority)?.helper;
 
 	const canSave = cleanValue(draft.name).length > 0 && cleanValue(draft.notes).length > 0;
 
@@ -110,6 +127,16 @@ export function CaptureModal({
 		}));
 	}
 
+	function toggleTag(tag: string) {
+		setDraft((current) => {
+			const hasTag = current.tags.includes(tag);
+			return {
+				...current,
+				tags: hasTag ? current.tags.filter((item) => item !== tag) : [...current.tags, tag],
+			};
+		});
+	}
+
 	function handleSave() {
 		if (isSaving || !canSave) {
 			return;
@@ -118,6 +145,8 @@ export function CaptureModal({
 		onSave({
 			...draft,
 			name: cleanValue(draft.name),
+			priority: draft.priority,
+			tags: draft.tags,
 			company: cleanValue(draft.company),
 			linkedinUrl: cleanValue(draft.linkedinUrl),
 			phoneNumber: cleanValue(draft.phoneNumber),
@@ -164,45 +193,116 @@ export function CaptureModal({
 							</Card>
 						) : null}
 
-						<View style={styles.sentenceWrap}>
-							<Typography variant="body">I met</Typography>
-							<TextInput
-								autoFocus
-								placeholder="Sarah"
-								placeholderTextColor={colors.textTertiary}
-								style={[styles.inlineInput, styles.shortInput]}
-								value={draft.name}
-								onChangeText={(value) => updateField("name", value)}
-							/>
-							<Typography variant="body">from</Typography>
-							<TextInput
-								placeholder="Stripe"
-								placeholderTextColor={colors.textTertiary}
-								style={[styles.inlineInput, styles.shortInput]}
-								value={draft.company}
-								onChangeText={(value) => updateField("company", value)}
-							/>
-							<Typography variant="body">at</Typography>
-							<TextInput
-								placeholder="React Native EU"
-								placeholderTextColor={colors.textTertiary}
-								style={[styles.inlineInput, styles.longInput]}
-								value={draft.event}
-								onChangeText={(value) => updateField("event", value)}
-								editable={!lockedEvent}
-							/>
-							<Typography variant="body">.</Typography>
-						</View>
+						{isCompactLayout ? (
+							<View style={styles.mobileFormStack}>
+								<View style={styles.fieldBlock}>
+									<Typography variant="caption">Name</Typography>
+									<TextInput
+										autoFocus
+										placeholder="Sarah"
+										placeholderTextColor={colors.textTertiary}
+										style={styles.fieldInput}
+										value={draft.name}
+										onChangeText={(value) => updateField("name", value)}
+									/>
+								</View>
+								<View style={styles.fieldBlock}>
+									<Typography variant="caption">Company</Typography>
+									<TextInput
+										placeholder="Stripe"
+										placeholderTextColor={colors.textTertiary}
+										style={styles.fieldInput}
+										value={draft.company}
+										onChangeText={(value) => updateField("company", value)}
+									/>
+								</View>
+								<View style={styles.fieldBlock}>
+									<Typography variant="caption">Event</Typography>
+									<TextInput
+										placeholder="React Native EU"
+										placeholderTextColor={colors.textTertiary}
+										style={styles.fieldInput}
+										value={draft.event}
+										onChangeText={(value) => updateField("event", value)}
+										editable={!lockedEvent}
+									/>
+								</View>
+							</View>
+						) : (
+							<View style={styles.sentenceWrap}>
+								<Typography variant="body">I met</Typography>
+								<TextInput
+									autoFocus
+									placeholder="Sarah"
+									placeholderTextColor={colors.textTertiary}
+									style={[styles.inlineInput, styles.shortInput]}
+									value={draft.name}
+									onChangeText={(value) => updateField("name", value)}
+								/>
+								<Typography variant="body">from</Typography>
+								<TextInput
+									placeholder="Stripe"
+									placeholderTextColor={colors.textTertiary}
+									style={[styles.inlineInput, styles.shortInput]}
+									value={draft.company}
+									onChangeText={(value) => updateField("company", value)}
+								/>
+								<Typography variant="body">at</Typography>
+								<TextInput
+									placeholder="React Native EU"
+									placeholderTextColor={colors.textTertiary}
+									style={[styles.inlineInput, styles.longInput]}
+									value={draft.event}
+									onChangeText={(value) => updateField("event", value)}
+									editable={!lockedEvent}
+								/>
+								<Typography variant="body">.</Typography>
+							</View>
+						)}
 
 						<View style={styles.priorityRow}>
-							<Typography variant="caption">Priority</Typography>
-							<Button
-								label={draft.isVip ? "⭐ Starred lead" : "⭐ Mark as lead"}
-								onPress={() => setDraft((current) => ({ ...current, isVip: !current.isVip }))}
-								variant={draft.isVip ? "primary" : "ghost"}
-								fullWidth={false}
-								size="compact"
-							/>
+							<View style={styles.priorityCopy}>
+								<Typography variant="caption">Priority</Typography>
+								<Typography variant="body" style={styles.helperText}>
+									{priorityHelper}
+								</Typography>
+							</View>
+							<View style={styles.priorityButtons}>
+								{priorityOptions.map((option) => (
+									<Button
+										key={option.value}
+										label={option.label}
+										onPress={() => setDraft((current) => ({ ...current, priority: option.value }))}
+										variant={draft.priority === option.value ? "primary" : "ghost"}
+										fullWidth={false}
+										size="compact"
+									/>
+								))}
+							</View>
+						</View>
+
+						<View style={styles.tagSection}>
+							<Typography variant="caption">Quick tags</Typography>
+							<Typography variant="body" style={styles.helperText}>
+								Tap the tags that best fit this contact. They can be filtered later in People.
+							</Typography>
+							<View style={styles.chipRow}>
+								{PERSON_TAG_SUGGESTIONS.map((tag) => (
+									<Button
+										key={tag}
+										label={tag}
+										onPress={() => toggleTag(tag)}
+										variant={draft.tags.includes(tag) ? "primary" : "ghost"}
+										fullWidth={false}
+										size="compact"
+									/>
+								))}
+							</View>
+							{draft.tags.length ? (
+								<Typography variant="caption" style={styles.tagSummary}>
+									Selected: {draft.tags.join(", ")}
+								</Typography>
+							) : null}
 						</View>
 
 						<View style={styles.optionalSection}>
@@ -251,27 +351,54 @@ export function CaptureModal({
 							) : null}
 						</View>
 
-						<View style={styles.sentenceWrap}>
-							<Typography variant="body">We talked about</Typography>
-							<TextInput
-								placeholder="Expo analytics"
-								placeholderTextColor={colors.textTertiary}
-								style={[styles.inlineInput, styles.wideInput]}
-								value={draft.notes}
-								onChangeText={(value) => updateField("notes", value)}
-								multiline
-							/>
-							<Typography variant="body">and I need to</Typography>
-							<TextInput
-								placeholder="send the metrics deck"
-								placeholderTextColor={colors.textTertiary}
-								style={[styles.inlineInput, styles.wideInput]}
-								value={draft.followUp}
-								onChangeText={(value) => updateField("followUp", value)}
-								multiline
-							/>
-							<Typography variant="body">.</Typography>
-						</View>
+						{isCompactLayout ? (
+							<View style={styles.mobileFormStack}>
+								<View style={styles.fieldBlock}>
+									<Typography variant="caption">Notes</Typography>
+									<TextInput
+										placeholder="Expo analytics"
+										placeholderTextColor={colors.textTertiary}
+										style={[styles.fieldInput, styles.textAreaInput]}
+										value={draft.notes}
+										onChangeText={(value) => updateField("notes", value)}
+										multiline
+									/>
+								</View>
+								<View style={styles.fieldBlock}>
+									<Typography variant="caption">Follow-up</Typography>
+									<TextInput
+										placeholder="send the metrics deck"
+										placeholderTextColor={colors.textTertiary}
+										style={[styles.fieldInput, styles.textAreaInput]}
+										value={draft.followUp}
+										onChangeText={(value) => updateField("followUp", value)}
+										multiline
+									/>
+								</View>
+							</View>
+						) : (
+							<View style={styles.sentenceWrap}>
+								<Typography variant="body">We talked about</Typography>
+								<TextInput
+									placeholder="Expo analytics"
+									placeholderTextColor={colors.textTertiary}
+									style={[styles.inlineInput, styles.wideInput]}
+									value={draft.notes}
+									onChangeText={(value) => updateField("notes", value)}
+									multiline
+								/>
+								<Typography variant="body">and I need to</Typography>
+								<TextInput
+									placeholder="send the metrics deck"
+									placeholderTextColor={colors.textTertiary}
+									style={[styles.inlineInput, styles.wideInput]}
+									value={draft.followUp}
+									onChangeText={(value) => updateField("followUp", value)}
+									multiline
+								/>
+								<Typography variant="body">.</Typography>
+							</View>
+						)}
 
 						<View style={styles.categorySection}>
 							<Typography variant="caption">Event type</Typography>
@@ -334,6 +461,28 @@ const styles = StyleSheet.create({
 		flex: 1,
 		gap: 6,
 	},
+	mobileFormStack: {
+		gap: 12,
+	},
+	fieldBlock: {
+		gap: 8,
+	},
+	fieldInput: {
+		minHeight: 48,
+		paddingHorizontal: 14,
+		paddingVertical: 12,
+		borderRadius: radius.button,
+		borderWidth: 1,
+		borderColor: colors.border,
+		backgroundColor: colors.surfaceMuted,
+		color: colors.textPrimary,
+		fontSize: 16,
+		lineHeight: 22,
+	},
+	textAreaInput: {
+		minHeight: 96,
+		textAlignVertical: "top",
+	},
 	closeText: {
 		color: colors.textSecondary,
 		fontWeight: "600",
@@ -384,10 +533,21 @@ const styles = StyleSheet.create({
 		flexWrap: "wrap",
 	},
 	priorityRow: {
-		flexDirection: "row",
-		alignItems: "center",
-		justifyContent: "space-between",
 		gap: 12,
+	},
+	priorityCopy: {
+		gap: 6,
+	},
+	priorityButtons: {
+		flexDirection: "row",
+		flexWrap: "wrap",
+		gap: 12,
+	},
+	tagSection: {
+		gap: 10,
+	},
+	tagSummary: {
+		color: colors.textSecondary,
 	},
 	optionalSection: {
 		gap: 10,
