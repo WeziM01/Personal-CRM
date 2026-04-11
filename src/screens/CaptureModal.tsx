@@ -118,7 +118,7 @@ export function CaptureModal({
 	const sentencePreview = useMemo(() => buildDraftSentence(draft), [draft]);
   const priorityHelper = priorityOptions.find((option) => option.value === draft.priority)?.helper;
 
-	const canSave = cleanValue(draft.name).length > 0 && cleanValue(draft.notes).length > 0;
+	const canSave = cleanValue(draft.name).length > 0;
 
 	function updateField(field: keyof ParsedPersonDraft, value: string) {
 		setDraft((current) => ({

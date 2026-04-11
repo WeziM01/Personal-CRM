@@ -77,8 +77,8 @@ export type EventInsight = {
   featuredPeople: string[];
 };
 
-// Demo toggle: set to false to return to day-based reminder timing.
-export const FAST_REMINDER_DEMO_MODE = true;
+// Keep real day-based reminder timing in the app; demo timing causes status changes within seconds.
+export const FAST_REMINDER_DEMO_MODE = false;
 export const STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 45 : 14;
 export const RECENT_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
 export const JUST_CONNECTED_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 10 : 0;
