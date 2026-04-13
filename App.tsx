@@ -37,7 +37,7 @@ export default function App() {
 
   const isGuest = Boolean(user?.is_anonymous);
   const guestBannerLabel = isCompactLayout ? "Guest mode active" : "Guest mode active · data is temporary";
-  const updatesBannerLabel = isCompactLayout ? "Future updates" : "Sign up for future updates";
+  const updatesBannerLabel = isCompactLayout ? "Click here for future news" : "Click here for future news";
 
   if (supabaseConfigMessage) {
     return (
@@ -140,6 +140,35 @@ export default function App() {
         setSettingsOpen(false);
       } catch {
         Alert.alert("Could not open bug report", "Please try again in a moment.");
+      }
+    }
+  }
+
+  async function handleSuggestFeature() {
+    const subject = "Feature Request - Personal CRM MVP";
+    const body = [
+      "What would you like the app to do?",
+      "",
+      "Why would it help?",
+      "",
+      "When would you use it?",
+      "",
+      `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
+    ].join("\n");
+    const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    try {
+      await Linking.openURL(url);
+      setSettingsOpen(false);
+    } catch {
+      try {
+        await Share.share({
+          title: subject,
+          message: `${subject}\n\n${body}`,
+        });
+        setSettingsOpen(false);
+      } catch {
+        Alert.alert("Could not open feature request", "Please try again in a moment.");
       }
     }
   }
@@ -248,17 +277,17 @@ export default function App() {
             size="compact"
           />
         </View>
-      ) : (
-        <View style={styles.currentEventBar}>
-          <Button
-            label={updatesBannerLabel}
-            onPress={handleOpenWaitlist}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-          />
-        </View>
-      )}
+      ) : null}
+
+      <View style={styles.currentEventBar}>
+        <Button
+          label={updatesBannerLabel}
+          onPress={handleOpenWaitlist}
+          variant="ghost"
+          fullWidth={false}
+          size="compact"
+        />
+      </View>
 
       {currentEvent ? (
         <View style={styles.currentEventBar}>
@@ -343,7 +372,7 @@ export default function App() {
 
             <View style={styles.settingsActions}>
               <Button label="🐛 Report a Bug" onPress={handleReportBug} />
-              <Button label="💡 Suggest a Feature" onPress={handleOpenWaitlist} variant="ghost" />
+              <Button label="💡 Suggest a Feature" onPress={handleSuggestFeature} variant="ghost" />
             </View>
           </View>
         </SafeAreaView>
