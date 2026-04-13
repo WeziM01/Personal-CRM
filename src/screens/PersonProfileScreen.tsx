@@ -10,7 +10,6 @@ import { Typography } from "../components/ui/Typography";
 import {
   EVENT_CATEGORY_OPTIONS,
   PERSON_TAG_SUGGESTIONS,
-  PersonPriority,
   buildReconnectDraft,
   JUST_CONNECTED_THRESHOLD,
   RECENT_CONTACT_THRESHOLD,
@@ -19,7 +18,6 @@ import {
   createPerson,
   deletePerson,
   ensureSessionUserId,
-  formatPriorityLabel,
   getOrCreateEvent,
   listPeopleInsights,
   markPersonContactedToday,
@@ -49,7 +47,6 @@ export function PersonProfileScreen({
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [isDeleting, setDeleting] = useState(false);
-  const [deleteArmedPersonId, setDeleteArmedPersonId] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<CaptureMode>("createInteraction");
   const [editorDraft, setEditorDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -62,16 +59,9 @@ export function PersonProfileScreen({
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [draftPreviewPerson, setDraftPreviewPerson] = useState<(typeof people)[number] | null>(null);
+  const [draftPreviewText, setDraftPreviewText] = useState("");
+  const [personActionMenu, setPersonActionMenu] = useState<(typeof people)[number] | null>(null);
   const [isInteractionPickerOpen, setInteractionPickerOpen] = useState(false);
-
-  const draftPreviewMessage = useMemo(() => {
-    if (!draftPreviewPerson) {
-      return "";
-    }
-
-    const message = buildMessageForPerson(draftPreviewPerson);
-    return message.length > 220 ? `${message.slice(0, 217)}...` : message;
-  }, [draftPreviewPerson]);
 
   const availableTags = useMemo(() => {
     return Array.from(new Set([...PERSON_TAG_SUGGESTIONS, ...people.flatMap((person) => person.tags)])).sort();
@@ -156,7 +146,6 @@ export function PersonProfileScreen({
       const userId = await ensureSessionUserId();
       const insights = await listPeopleInsights(userId);
       setPeople(insights);
-      setDeleteArmedPersonId(null);
       setSelectedPersonId((current) => {
         if (current && insights.some((person) => person.id === current)) {
           return current;
@@ -195,7 +184,7 @@ export function PersonProfileScreen({
       phoneNumber: person.phoneNumber,
       event: person.lastEventName || "",
       notes: "",
-      followUp: person.followUp === "None yet" ? "" : person.followUp,
+      followUp: "",
     });
     setCaptureOpen(true);
   }
@@ -262,7 +251,7 @@ export function PersonProfileScreen({
       phoneNumber: person.phoneNumber,
       event: person.lastEventName || "",
       notes: person.lastInteractionNote,
-      followUp: person.followUp === "None yet" ? "" : person.followUp,
+      followUp: "",
     });
     setCaptureOpen(true);
   }
@@ -299,7 +288,7 @@ export function PersonProfileScreen({
           eventId = (await getOrCreateEvent(userId, editEventName, draft.eventCategory || null)).id;
         }
 
-        const rawNote = buildInteractionRecord(draft.notes, draft.followUp, draft.company);
+        const rawNote = buildInteractionRecord(draft.notes, "", draft.company);
 
         if (selectedPerson.lastInteractionId) {
           await updateInteraction({
@@ -364,7 +353,7 @@ export function PersonProfileScreen({
         userId,
         personId: activePersonId,
         eventId,
-        rawNote: buildInteractionRecord(draft.notes, draft.followUp, draft.company),
+        rawNote: buildInteractionRecord(draft.notes, "", draft.company),
       });
 
       setCaptureOpen(false);
@@ -398,13 +387,8 @@ export function PersonProfileScreen({
     }
   }
 
-  async function handleDeletePerson(person = selectedPerson) {
+  async function performDeletePerson(person = selectedPerson) {
     if (!person) {
-      return;
-    }
-
-    if (deleteArmedPersonId !== person.id) {
-      setDeleteArmedPersonId(person.id);
       return;
     }
 
@@ -419,8 +403,28 @@ export function PersonProfileScreen({
       Alert.alert("Delete failed", message);
     } finally {
       setDeleting(false);
-      setDeleteArmedPersonId(null);
     }
+  }
+
+  function handleDeletePerson(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    Alert.alert(
+      "Delete contact?",
+        `${person.name} will be removed permanently.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            void performDeletePerson(person);
+          },
+        },
+      ]
+    );
   }
 
   async function handleOpenExternal(url: string) {
@@ -444,12 +448,12 @@ export function PersonProfileScreen({
     });
   }
 
-  async function openDraftMessage(person = selectedPerson) {
+  async function openDraftMessage(person = selectedPerson, messageOverride?: string) {
     if (!person) {
       return;
     }
 
-    const message = buildMessageForPerson(person);
+    const message = messageOverride?.trim() || buildMessageForPerson(person);
     const digits = person.phoneNumber
       ? person.phoneNumber.replace(/[^\d+]/g, "").replace(/^00/, "+")
       : "";
@@ -516,32 +520,8 @@ export function PersonProfileScreen({
       return;
     }
 
+    setDraftPreviewText(buildMessageForPerson(person));
     setDraftPreviewPerson(person);
-  }
-
-  async function handleUpdatePriority(priority: PersonPriority, person = selectedPerson) {
-    if (!person) {
-      return;
-    }
-
-    try {
-      const userId = await ensureSessionUserId();
-      await updatePersonDetails({
-        userId,
-        personId: person.id,
-        name: person.name,
-        company: person.company,
-        linkedinUrl: person.linkedinUrl,
-        phoneNumber: person.phoneNumber,
-        priority,
-        tags: person.tags,
-      });
-      await loadProfileData();
-      Alert.alert("Updated", `${person.name} is now ${formatPriorityLabel(priority).toLowerCase()}.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to update priority.";
-      Alert.alert("Update failed", message);
-    }
   }
 
   return (
@@ -648,7 +628,7 @@ export function PersonProfileScreen({
               Search
             </Typography>
             <TextInput
-              placeholder="Search name, company, notes, follow-up, tags"
+              placeholder="Search name, company, notes, tags"
               placeholderTextColor={colors.textTertiary}
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -688,7 +668,6 @@ export function PersonProfileScreen({
               <Typography variant="body" style={styles.featureBody}>
                 {selectedPerson.bannerLabel} · {selectedPerson.interactionCount} logged moments · {selectedPerson.lastEventName || "No event yet"}
               </Typography>
-              <Typography variant="caption">{formatPriorityLabel(selectedPerson.priority)}</Typography>
               {selectedPerson.company ? (
                 <Typography variant="caption">{selectedPerson.company}</Typography>
               ) : null}
@@ -703,28 +682,11 @@ export function PersonProfileScreen({
               ) : null}
               {searchQuery ? <Typography variant="caption">Search: {searchQuery}</Typography> : null}
 
-              <View style={styles.prioritySelector}>
-                <Typography variant="caption">Priority</Typography>
-                <View style={styles.prioritySelectorButtons}>
-                  {(["high", "medium", "low"] as PersonPriority[]).map((priority) => (
-                    <Button
-                      key={priority}
-                      label={priority.charAt(0).toUpperCase() + priority.slice(1)}
-                      onPress={() => handleUpdatePriority(priority)}
-                      variant={selectedPerson.priority === priority ? "primary" : "ghost"}
-                      fullWidth={false}
-                      size="compact"
-                    />
-                  ))}
-                </View>
-              </View>
-
               <View style={styles.actionRow}>
                 <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(selectedPerson)} fullWidth={false} size="compact" />
-                <Button label="Edit contact" onPress={() => openEditPerson(selectedPerson)} variant="ghost" fullWidth={false} size="compact" />
                 {selectedPerson.linkedinUrl ? (
                   <Button
-                    label="Open LinkedIn"
+                    label="LinkedIn"
                     onPress={() => handleOpenExternal(selectedPerson.linkedinUrl)}
                     variant="ghost"
                     fullWidth={false}
@@ -732,8 +694,8 @@ export function PersonProfileScreen({
                   />
                 ) : null}
                 <Button
-                  label="Edit contact"
-                  onPress={() => openEditPerson(selectedPerson)}
+                  label="Edit"
+                  onPress={() => setPersonActionMenu(selectedPerson)}
                   variant="ghost"
                   fullWidth={false}
                   size="compact"
@@ -744,25 +706,11 @@ export function PersonProfileScreen({
                   fullWidth={false}
                   size="compact"
                 />
-                <Button
-                  label="Delete contact"
-                  onPress={() => handleDeletePerson(selectedPerson)}
-                  variant="ghost"
-                  fullWidth={false}
-                  size="compact"
-                  loading={isDeleting}
-                  style={deleteArmedPersonId === selectedPerson.id ? styles.armedDeleteButton : null}
-                />
               </View>
-
-              {deleteArmedPersonId === selectedPerson.id ? (
-                <Typography variant="caption">Tap delete again to confirm removal.</Typography>
-              ) : null}
 
               <Typography variant="body" style={styles.featureNote}>
                 {selectedPerson.lastInteractionNote}
               </Typography>
-              <Typography variant="caption">Follow up: {selectedPerson.followUp}</Typography>
             </Card>
           ) : null}
 
@@ -790,7 +738,6 @@ export function PersonProfileScreen({
                         <Typography variant="body" style={styles.compactCompany} numberOfLines={1}>
                           {person.company || "No company"}
                         </Typography>
-                        <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                       </View>
                       <View style={styles.compactActions}>
                         {person.linkedinUrl ? (
@@ -822,41 +769,11 @@ export function PersonProfileScreen({
                           <Typography variant="caption">{person.interactionCount} notes</Typography>
                         </View>
                         {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
-                        <Typography variant="caption">Follow up: {person.followUp}</Typography>
-                        <View style={styles.prioritySelector}>
-                          <Typography variant="caption">Priority</Typography>
-                          <View style={styles.prioritySelectorButtons}>
-                            {(["high", "medium", "low"] as PersonPriority[]).map((priority) => (
-                              <Button
-                                key={priority}
-                                label={priority.charAt(0).toUpperCase() + priority.slice(1)}
-                                onPress={() => handleUpdatePriority(priority, person)}
-                                variant={person.priority === priority ? "primary" : "ghost"}
-                                fullWidth={false}
-                                size="compact"
-                              />
-                            ))}
-                          </View>
-                        </View>
                         <View style={styles.compactExpandedActions}>
                           <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(person)} fullWidth={false} size="compact" />
-                          <Button label="Edit contact" onPress={() => openEditPerson(person)} variant="ghost" fullWidth={false} size="compact" />
+                          <Button label="Edit" onPress={() => setPersonActionMenu(person)} variant="ghost" fullWidth={false} size="compact" />
                           <Button label="Mark today" onPress={() => handleMarkContactedToday(person)} variant="ghost" fullWidth={false} size="compact" />
-                          <Button
-                            label={deleteArmedPersonId === person.id ? "Delete now" : "Delete"}
-                            onPress={() => handleDeletePerson(person)}
-                            variant="ghost"
-                            fullWidth={false}
-                            size="compact"
-                            loading={isDeleting && deleteArmedPersonId === person.id}
-                            style={deleteArmedPersonId === person.id ? styles.armedDeleteButton : null}
-                          />
                         </View>
-                        {deleteArmedPersonId === person.id ? (
-                          <Typography variant="caption" style={styles.deleteConfirmText}>
-                            Tap "Delete now" to confirm permanent removal.
-                          </Typography>
-                        ) : null}
                       </View>
                     ) : null}
                   </>
@@ -865,15 +782,14 @@ export function PersonProfileScreen({
                     <View style={styles.rowTop}>
                       <View style={styles.personCopy}>
                         <Typography variant="h2">{person.name}</Typography>
-                        <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                         <Typography variant="caption">
                           {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                         </Typography>
                         {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                       </View>
                       <Button
-                        label={person.id === selectedPerson?.id ? "Editing" : "Edit"}
-                        onPress={() => openEditPerson(person)}
+                        label="Edit"
+                        onPress={() => setPersonActionMenu(person)}
                         variant={person.id === selectedPerson?.id ? "primary" : "ghost"}
                         fullWidth={false}
                         size="compact"
@@ -980,9 +896,14 @@ export function PersonProfileScreen({
                 <Typography variant="body" style={styles.confirmMeta}>
                   {draftPreviewPerson.name} · {draftPreviewPerson.phoneNumber}
                 </Typography>
-                <Typography variant="body" style={styles.confirmPreview}>
-                  {draftPreviewMessage}
-                </Typography>
+                <TextInput
+                  value={draftPreviewText}
+                  onChangeText={setDraftPreviewText}
+                  multiline
+                  placeholder="Edit your WhatsApp message before opening it"
+                  placeholderTextColor={colors.textTertiary}
+                  style={styles.draftEditorInput}
+                />
                 <View style={styles.confirmActions}>
                   <Button
                     label="Edit contact"
@@ -1008,9 +929,57 @@ export function PersonProfileScreen({
                     size="compact"
                     onPress={() => {
                       const person = draftPreviewPerson;
+                      const message = draftPreviewText;
                       setDraftPreviewPerson(null);
-                      void openDraftMessage(person);
+                      setDraftPreviewText("");
+                      void openDraftMessage(person, message);
                     }}
+                  />
+                </View>
+              </Card>
+            </View>
+          </View>
+        ) : null}
+
+        {personActionMenu ? (
+          <View style={styles.confirmOverlay}>
+            <Pressable style={styles.confirmBackdrop} onPress={() => setPersonActionMenu(null)} />
+            <View style={styles.confirmCardWrap}>
+              <Card style={styles.confirmCard}>
+                <Typography variant="h2">Edit contact</Typography>
+                <Typography variant="body" style={styles.confirmMeta}>
+                  {personActionMenu.name}
+                </Typography>
+                <View style={styles.confirmActions}>
+                  <Button
+                    label="Edit details"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => {
+                      const person = personActionMenu;
+                      setPersonActionMenu(null);
+                      openEditPerson(person);
+                    }}
+                  />
+                  <Button
+                    label="Delete contact"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    loading={isDeleting}
+                    onPress={() => {
+                      const person = personActionMenu;
+                      setPersonActionMenu(null);
+                      handleDeletePerson(person);
+                    }}
+                  />
+                  <Button
+                    label="Cancel"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => setPersonActionMenu(null)}
                   />
                 </View>
               </Card>
@@ -1021,7 +990,7 @@ export function PersonProfileScreen({
         {isCompactLayout ? (
           <FloatingActionBar
             actions={[
-              { label: "Add person", onPress: () => openCreatePerson(""), variant: "ghost" },
+              { label: "+", onPress: () => openCreatePerson(""), variant: "ghost" },
               { label: selectedPerson ? "Add interaction" : "Pick contact", onPress: openCreateInteraction },
             ]}
           />
@@ -1124,6 +1093,19 @@ const styles = StyleSheet.create({
   confirmPreview: {
     color: colors.textPrimary,
   },
+  draftEditorInput: {
+    minHeight: 120,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    color: colors.textPrimary,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    textAlignVertical: "top",
+    fontSize: 15,
+    lineHeight: 22,
+  },
   confirmActions: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1192,14 +1174,6 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
-  prioritySelector: {
-    gap: 10,
-  },
-  prioritySelectorButtons: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
   tagPillRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1212,12 +1186,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
-  },
-  armedDeleteButton: {
-    borderColor: colors.destructive,
-  },
-  deleteConfirmText: {
-    color: colors.destructive,
   },
   featureNote: {
     color: colors.textSecondary,

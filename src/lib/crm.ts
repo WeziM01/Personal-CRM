@@ -82,7 +82,6 @@ export const FAST_REMINDER_DEMO_MODE = false;
 export const STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 45 : 14;
 export const RECENT_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
 export const JUST_CONNECTED_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 10 : 0;
-export const HIGH_PRIORITY_STALE_THRESHOLD = JUST_CONNECTED_THRESHOLD;
 
 export const PERSON_TAG_SUGGESTIONS = [
   "investor",
@@ -97,11 +96,11 @@ export const PERSON_TAG_SUGGESTIONS = [
 
 export const EVENT_CATEGORY_OPTIONS: Array<{ label: string; value: EventCategory | "all" }> = [
   { label: "All", value: "all" },
-  { label: "🤝 Networking", value: "networking" },
-  { label: "🎤 Conference", value: "conference" },
-  { label: "☕ Coffee", value: "coffee" },
-  { label: "💻 Zoom", value: "zoom" },
-  { label: "🍻 Drinks", value: "social" },
+  { label: "Networking", value: "networking" },
+  { label: "Conference", value: "conference" },
+  { label: "Coffee", value: "coffee" },
+  { label: "Zoom", value: "zoom" },
+  { label: "Drinks", value: "social" },
   { label: "Investor", value: "investor" },
   { label: "Workshop", value: "workshop" },
   { label: "Community", value: "community" },
@@ -712,32 +711,24 @@ export function buildContactStatus(daysSinceLastContact: number | null, priority
     return "No contact yet";
   }
 
-  if (priority === "low") {
-    return "Low priority";
-  }
-
   if (daysSinceLastContact <= JUST_CONNECTED_THRESHOLD) {
     return FAST_REMINDER_DEMO_MODE ? "Connected just now" : "Connected today";
   }
 
   if (daysSinceLastContact <= RECENT_CONTACT_THRESHOLD) {
-    return priority === "high" ? "High priority" : "Recently connected";
+    return "Recently connected";
   }
 
   if (!isContactStale(daysSinceLastContact, priority)) {
     return "Cooling";
   }
 
-  return priority === "high" ? "Needs same-day follow-up" : "Needs follow-up";
+  return "Needs follow-up";
 }
 
 export function buildContactBanner(daysSinceLastContact: number | null, priority: PersonPriority = "medium") {
   if (daysSinceLastContact === null) {
     return "No contact on record yet";
-  }
-
-  if (priority === "low") {
-    return "Low priority: no nudge scheduled";
   }
 
   if (daysSinceLastContact <= JUST_CONNECTED_THRESHOLD) {
@@ -750,9 +741,7 @@ export function buildContactBanner(daysSinceLastContact: number | null, priority
     }
 
     if (isContactStale(daysSinceLastContact, priority)) {
-      return priority === "high"
-        ? `Same-day nudge: ${daysSinceLastContact}s since contact`
-        : `Priority nudge: ${daysSinceLastContact}s since contact`;
+      return `Needs a nudge: ${daysSinceLastContact}s since contact`;
     }
 
     return `Haven't connected in ${daysSinceLastContact} seconds`;
@@ -763,23 +752,13 @@ export function buildContactBanner(daysSinceLastContact: number | null, priority
   }
 
   if (isContactStale(daysSinceLastContact, priority)) {
-    return priority === "high"
-      ? `Same-day nudge: ${daysSinceLastContact} days since contact`
-      : `Priority nudge: ${daysSinceLastContact} days since contact`;
+    return `Needs a nudge: ${daysSinceLastContact} days since contact`;
   }
 
   return `Haven't connected in ${daysSinceLastContact} days`;
 }
 
 export function getStaleThreshold(priority: PersonPriority) {
-  if (priority === "high") {
-    return HIGH_PRIORITY_STALE_THRESHOLD;
-  }
-
-  if (priority === "low") {
-    return null;
-  }
-
   return STALE_CONTACT_THRESHOLD;
 }
 
@@ -797,15 +776,7 @@ export function isContactStale(daysSinceLastContact: number | null, priority: Pe
 }
 
 export function formatPriorityLabel(priority: PersonPriority) {
-  if (priority === "high") {
-    return "High priority";
-  }
-
-  if (priority === "low") {
-    return "Low priority";
-  }
-
-  return "Medium priority";
+  return "Tracked contact";
 }
 
 export function buildReconnectDraft(input: {

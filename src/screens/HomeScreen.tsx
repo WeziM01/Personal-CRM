@@ -13,7 +13,6 @@ import {
   createInteraction,
   createPerson,
   ensureSessionUserId,
-  formatPriorityLabel,
   formatCategoryLabel,
   getOrCreateEvent,
   isContactStale,
@@ -255,7 +254,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                       <Typography variant="caption">
                         {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
                       </Typography>
-                      <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                     </View>
                     <Typography variant="caption">{person.statusLabel}</Typography>
                   </View>
@@ -287,7 +285,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                     <Typography variant="caption">
                       {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
                     </Typography>
-                    <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                   </View>
                   <Typography variant="caption">{person.statusLabel}</Typography>
                 </View>
@@ -315,7 +312,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                   <View style={styles.connectionMain}>
                     <Typography variant="h2">{person.name}</Typography>
                     {person.company ? <Typography variant="caption">{person.company}</Typography> : null}
-                    <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                   </View>
                   <Typography variant="caption">{person.bannerLabel}</Typography>
                 </View>
@@ -352,11 +348,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           </View>
         </ScrollView>
 
-        <FloatingFab
-          extended
-          label="Met someone"
-          onPress={() => setCaptureOpen(true)}
-        />
+        <FloatingFab label="+" onPress={() => setCaptureOpen(true)} />
 
         <CaptureModal
           visible={isCaptureOpen}

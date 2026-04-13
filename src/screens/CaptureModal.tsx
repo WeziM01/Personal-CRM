@@ -17,7 +17,6 @@ import {
 	EVENT_CATEGORY_OPTIONS,
 	EventCategory,
 	formatCategoryLabel,
-	formatPriorityLabel,
 	PERSON_TAG_SUGGESTIONS,
 	PersonPriority,
 } from "../lib/crm";
@@ -51,12 +50,6 @@ const emptyDraft: ParsedPersonDraft = {
 	rawInput: "",
 };
 
-const priorityOptions: Array<{ label: string; value: PersonPriority; helper: string }> = [
-	{ label: "High", value: "high", helper: "Same-day nudge and included in Need a nudge." },
-	{ label: "Medium", value: "medium", helper: "Follow up after 14 days." },
-	{ label: "Low", value: "low", helper: "No nudge, but still searchable." },
-];
-
 export type LockedEventDraft = {
 	name: string;
 	category: EventCategory;
@@ -81,10 +74,9 @@ function buildDraftSentence(draft: ParsedPersonDraft) {
 	const name = cleanValue(draft.name) || "someone";
 	const company = cleanValue(draft.company) || "their company";
 	const event = cleanValue(draft.event) || "somewhere memorable";
-	const notes = cleanValue(draft.notes) || "what clicked between you";
-	const followUp = cleanValue(draft.followUp) || "what to do next";
+	const context = cleanValue(draft.notes) || "what clicked and what happens next";
 
-	return `I met ${name} from ${company} at ${event}. We talked about ${notes} and I need to ${followUp}.`;
+	return `I met ${name} from ${company} at ${event}. Context and next steps: ${context}.`;
 }
 
 export function CaptureModal({
@@ -100,23 +92,27 @@ export function CaptureModal({
 	const { width } = useWindowDimensions();
 	const isCompactLayout = width < 720;
 	const [draft, setDraft] = useState<ParsedPersonDraft>(emptyDraft);
-	const [showContactLinks, setShowContactLinks] = useState(false);
 
 	useEffect(() => {
 		if (visible) {
+			const mergedContext = [initialDraft?.notes, initialDraft?.followUp]
+				.map((value) => cleanValue(value || ""))
+				.filter(Boolean)
+				.join("\n\n");
+
 			setDraft({
 				...emptyDraft,
 				...initialDraft,
 				event: lockedEvent?.name || initialDraft?.event || "",
 				eventCategory: lockedEvent?.category || initialDraft?.eventCategory || "",
+				notes: mergedContext || initialDraft?.notes || "",
+				followUp: "",
 				rawInput: initialDraft?.rawInput || "",
 			});
-			setShowContactLinks(Boolean(initialDraft?.linkedinUrl || initialDraft?.phoneNumber));
 		}
 	}, [initialDraft, lockedEvent, visible]);
 
 	const sentencePreview = useMemo(() => buildDraftSentence(draft), [draft]);
-  const priorityHelper = priorityOptions.find((option) => option.value === draft.priority)?.helper;
 
 	const canSave = cleanValue(draft.name).length > 0;
 
@@ -153,7 +149,7 @@ export function CaptureModal({
 			event: cleanValue(draft.event) || "No event",
 			eventCategory: draft.eventCategory,
 			notes: cleanValue(draft.notes),
-			followUp: cleanValue(draft.followUp) || "None yet",
+			followUp: "",
 			rawInput: sentencePreview,
 		});
 	}
@@ -260,27 +256,6 @@ export function CaptureModal({
 							</View>
 						)}
 
-						<View style={styles.priorityRow}>
-							<View style={styles.priorityCopy}>
-								<Typography variant="caption">Priority</Typography>
-								<Typography variant="body" style={styles.helperText}>
-									{priorityHelper}
-								</Typography>
-							</View>
-							<View style={styles.priorityButtons}>
-								{priorityOptions.map((option) => (
-									<Button
-										key={option.value}
-										label={option.label}
-										onPress={() => setDraft((current) => ({ ...current, priority: option.value }))}
-										variant={draft.priority === option.value ? "primary" : "ghost"}
-										fullWidth={false}
-										size="compact"
-									/>
-								))}
-							</View>
-						</View>
-
 						<View style={styles.tagSection}>
 							<Typography variant="caption">Quick tags</Typography>
 							<Typography variant="body" style={styles.helperText}>
@@ -305,58 +280,38 @@ export function CaptureModal({
 							) : null}
 						</View>
 
-						<View style={styles.optionalSection}>
-							<View style={styles.optionalSectionHeader}>
-								<View style={styles.optionalCopy}>
-									<Typography variant="caption">Optional private contact links</Typography>
-									<Typography variant="body" style={styles.helperText}>
-										Only add these if they were explicitly shared and you want quick follow-up.
-									</Typography>
-								</View>
-								<Button
-									label={showContactLinks ? "Hide" : "Add"}
-									onPress={() => setShowContactLinks((current) => !current)}
-									variant="ghost"
-									fullWidth={false}
-									size="compact"
+						<View style={styles.metaInputsRow}>
+							<View style={styles.metaInputBlock}>
+								<Typography variant="caption">LinkedIn</Typography>
+								<TextInput
+									placeholder="linkedin.com/in/sarah"
+									placeholderTextColor={colors.textTertiary}
+									style={styles.metaInput}
+									value={draft.linkedinUrl}
+									onChangeText={(value) => updateField("linkedinUrl", value)}
+									autoCapitalize="none"
+									autoCorrect={false}
 								/>
 							</View>
-
-							{showContactLinks ? (
-								<View style={styles.metaInputsRow}>
-									<View style={styles.metaInputBlock}>
-										<Typography variant="caption">LinkedIn</Typography>
-										<TextInput
-											placeholder="linkedin.com/in/sarah"
-											placeholderTextColor={colors.textTertiary}
-											style={styles.metaInput}
-											value={draft.linkedinUrl}
-											onChangeText={(value) => updateField("linkedinUrl", value)}
-											autoCapitalize="none"
-											autoCorrect={false}
-										/>
-									</View>
-									<View style={styles.metaInputBlock}>
-										<Typography variant="caption">Phone / WhatsApp</Typography>
-										<TextInput
-											placeholder="+44 7700 900123"
-											placeholderTextColor={colors.textTertiary}
-											style={styles.metaInput}
-											value={draft.phoneNumber}
-											onChangeText={(value) => updateField("phoneNumber", value)}
-											keyboardType="phone-pad"
-										/>
-									</View>
-								</View>
-							) : null}
+							<View style={styles.metaInputBlock}>
+								<Typography variant="caption">WhatsApp</Typography>
+								<TextInput
+									placeholder="+44 7700 900123"
+									placeholderTextColor={colors.textTertiary}
+									style={styles.metaInput}
+									value={draft.phoneNumber}
+									onChangeText={(value) => updateField("phoneNumber", value)}
+									keyboardType="phone-pad"
+								/>
+							</View>
 						</View>
 
 						{isCompactLayout ? (
 							<View style={styles.mobileFormStack}>
 								<View style={styles.fieldBlock}>
-									<Typography variant="caption">Notes</Typography>
+									<Typography variant="caption">Context / Next Steps</Typography>
 									<TextInput
-										placeholder="Expo analytics"
+										placeholder="What matters here, and what should happen next?"
 										placeholderTextColor={colors.textTertiary}
 										style={[styles.fieldInput, styles.textAreaInput]}
 										value={draft.notes}
@@ -364,39 +319,18 @@ export function CaptureModal({
 										multiline
 									/>
 								</View>
-								<View style={styles.fieldBlock}>
-									<Typography variant="caption">Follow-up</Typography>
-									<TextInput
-										placeholder="send the metrics deck"
-										placeholderTextColor={colors.textTertiary}
-										style={[styles.fieldInput, styles.textAreaInput]}
-										value={draft.followUp}
-										onChangeText={(value) => updateField("followUp", value)}
-										multiline
-									/>
-								</View>
 							</View>
 						) : (
 							<View style={styles.sentenceWrap}>
-								<Typography variant="body">We talked about</Typography>
+								<Typography variant="body">Context / Next Steps</Typography>
 								<TextInput
-									placeholder="Expo analytics"
+									placeholder="What matters here, and what should happen next?"
 									placeholderTextColor={colors.textTertiary}
 									style={[styles.inlineInput, styles.wideInput]}
 									value={draft.notes}
 									onChangeText={(value) => updateField("notes", value)}
 									multiline
 								/>
-								<Typography variant="body">and I need to</Typography>
-								<TextInput
-									placeholder="send the metrics deck"
-									placeholderTextColor={colors.textTertiary}
-									style={[styles.inlineInput, styles.wideInput]}
-									value={draft.followUp}
-									onChangeText={(value) => updateField("followUp", value)}
-									multiline
-								/>
-								<Typography variant="body">.</Typography>
 							</View>
 						)}
 
@@ -532,35 +466,11 @@ const styles = StyleSheet.create({
 		gap: 10,
 		flexWrap: "wrap",
 	},
-	priorityRow: {
-		gap: 12,
-	},
-	priorityCopy: {
-		gap: 6,
-	},
-	priorityButtons: {
-		flexDirection: "row",
-		flexWrap: "wrap",
-		gap: 12,
-	},
 	tagSection: {
 		gap: 10,
 	},
 	tagSummary: {
 		color: colors.textSecondary,
-	},
-	optionalSection: {
-		gap: 10,
-	},
-	optionalSectionHeader: {
-		flexDirection: "row",
-		justifyContent: "space-between",
-		alignItems: "flex-start",
-		gap: 12,
-	},
-	optionalCopy: {
-		flex: 1,
-		gap: 6,
 	},
 	metaInputBlock: {
 		flex: 1,

@@ -25,7 +25,6 @@ import {
   deleteEvent,
   ensureSessionUserId,
   formatCategoryLabel,
-  formatPriorityLabel,
   getOrCreateEvent,
   listAllInteractions,
   listEventInsights,
@@ -538,7 +537,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                     <Typography variant="caption">
                       {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                     </Typography>
-                    <Typography variant="caption">{formatPriorityLabel(person.priority)}</Typography>
                     {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                   </View>
                   <Typography variant="caption">{person.bannerLabel}</Typography>
@@ -546,7 +544,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                 <Typography variant="body" style={styles.valueBlock} numberOfLines={2}>
                   {person.lastInteractionNote}
                 </Typography>
-                <Typography variant="caption">Follow up: {person.followUp}</Typography>
               </Card>
             ))}
             {!isLoading && filteredPeople.length === 0 ? (

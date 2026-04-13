@@ -27,6 +27,7 @@ export default function App() {
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
   const [isAccountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [isNavMenuOpen, setNavMenuOpen] = useState(false);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [screen, setScreen] = useState<ScreenKey>("home");
   const [personStatusMode, setPersonStatusMode] = useState<PersonStatusMode>("all");
@@ -194,78 +195,107 @@ export default function App() {
       await signInAsGuest();
     } finally {
       setAccountMenuOpen(false);
+      setNavMenuOpen(false);
     }
+  }
+
+  function openAccountArea() {
+    setNavMenuOpen(false);
+
+    if (isGuest) {
+      setAuthModalOpen(true);
+      return;
+    }
+
+    setAccountMenuOpen(true);
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={[styles.topBar, isCompactLayout ? styles.topBarCompact : null]}>
-        <View>
-          <Button
-            label="Home"
-            onPress={() => setScreen("home")}
-            variant={screen === "home" ? "primary" : "ghost"}
-            fullWidth={false}
-            size="compact"
-            style={styles.switchButton}
-          />
+      {isCompactLayout ? (
+        <View style={[styles.topBar, styles.topBarCompact]}
+        >
+          <View style={styles.compactTopRow}>
+            <View style={styles.compactBrandWrap}>
+              <Typography variant="caption">Blackbook</Typography>
+              <Typography variant="h2">{screen === "home" ? "Home" : screen === "event" ? "Events" : "People"}</Typography>
+            </View>
+            <View style={styles.compactTopActions}>
+              <Button
+                label={currentEvent ? (isVeryCompactLayout ? "Event" : "Current event") : "Set event"}
+                onPress={() => setCurrentEventOpen(true)}
+                variant="ghost"
+                fullWidth={false}
+                size="compact"
+                style={styles.compactHeaderButton}
+              />
+              <Button
+                label="Menu"
+                onPress={() => setNavMenuOpen(true)}
+                variant="ghost"
+                fullWidth={false}
+                size="compact"
+                style={styles.compactHeaderButton}
+              />
+            </View>
+          </View>
         </View>
-        <View style={[styles.switcher, isCompactLayout ? styles.switcherCompact : null]}>
-          <Button
-            label={isGuest ? "Guest" : `@${currentUsername || "member"}`}
-            onPress={() => {
-              if (isGuest) {
-                setAuthModalOpen(true);
-                return;
-              }
-
-              setAccountMenuOpen(true);
-            }}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
-          />
-          <Button
-            label={
-              currentEvent
-                ? isVeryCompactLayout
-                  ? "Current Event"
-                  : `Current: ${currentEvent.name}`
-                : "Set Current Event"
-            }
-            onPress={() => setCurrentEventOpen(true)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-            style={[styles.currentEventButton, isCompactLayout ? styles.switchButtonCompact : null]}
-          />
-          <Button
-            label="Events"
-            onPress={() => setScreen("event")}
-            variant={screen === "event" ? "primary" : "ghost"}
-            fullWidth={false}
-            size="compact"
-            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
-          />
-          <Button
-            label="People"
-            onPress={() => setScreen("person")}
-            variant={screen === "person" ? "primary" : "ghost"}
-            fullWidth={false}
-            size="compact"
-            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
-          />
-          <Button
-            label="⚙️"
-            onPress={() => setSettingsOpen(true)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-            style={[styles.switchButton, isCompactLayout ? styles.switchButtonCompact : null]}
-          />
+      ) : (
+        <View style={styles.topBar}>
+          <View>
+            <Button
+              label="Home"
+              onPress={() => setScreen("home")}
+              variant={screen === "home" ? "primary" : "ghost"}
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+          </View>
+          <View style={styles.switcher}>
+            <Button
+              label={isGuest ? "Guest" : `@${currentUsername || "member"}`}
+              onPress={openAccountArea}
+              variant="ghost"
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+            <Button
+              label={currentEvent ? `Current: ${currentEvent.name}` : "Set Current Event"}
+              onPress={() => setCurrentEventOpen(true)}
+              variant="ghost"
+              fullWidth={false}
+              size="compact"
+              style={styles.currentEventButton}
+            />
+            <Button
+              label="Events"
+              onPress={() => setScreen("event")}
+              variant={screen === "event" ? "primary" : "ghost"}
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+            <Button
+              label="People"
+              onPress={() => setScreen("person")}
+              variant={screen === "person" ? "primary" : "ghost"}
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+            <Button
+              label="Settings"
+              onPress={() => setSettingsOpen(true)}
+              variant="ghost"
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+          </View>
         </View>
-      </View>
+      )}
 
       {isGuest ? (
         <View style={styles.currentEventBar}>
@@ -360,6 +390,52 @@ export default function App() {
         </View>
       </Modal>
 
+      <Modal visible={isNavMenuOpen} transparent animationType="fade" onRequestClose={() => setNavMenuOpen(false)}>
+        <View style={styles.accountMenuOverlay}>
+          <View style={styles.accountMenuCard}>
+            <Typography variant="caption">Navigate</Typography>
+            <Button
+              label="Home"
+              onPress={() => {
+                setScreen("home");
+                setNavMenuOpen(false);
+              }}
+              variant={screen === "home" ? "primary" : "ghost"}
+            />
+            <Button
+              label="Events"
+              onPress={() => {
+                setScreen("event");
+                setNavMenuOpen(false);
+              }}
+              variant={screen === "event" ? "primary" : "ghost"}
+            />
+            <Button
+              label="People"
+              onPress={() => {
+                setScreen("person");
+                setNavMenuOpen(false);
+              }}
+              variant={screen === "person" ? "primary" : "ghost"}
+            />
+            <Button
+              label={isGuest ? "Guest account" : `Account @${currentUsername || "member"}`}
+              onPress={openAccountArea}
+              variant="ghost"
+            />
+            <Button
+              label="Settings"
+              onPress={() => {
+                setNavMenuOpen(false);
+                setSettingsOpen(true);
+              }}
+              variant="ghost"
+            />
+            <Button label="Close" onPress={() => setNavMenuOpen(false)} variant="ghost" />
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={isSettingsOpen} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView style={styles.safeArea}>
           <View style={styles.settingsContainer}>
@@ -371,8 +447,8 @@ export default function App() {
             </View>
 
             <View style={styles.settingsActions}>
-              <Button label="🐛 Report a Bug" onPress={handleReportBug} />
-              <Button label="💡 Suggest a Feature" onPress={handleSuggestFeature} variant="ghost" />
+              <Button label="Report a bug" onPress={handleReportBug} />
+              <Button label="Suggest a feature" onPress={handleSuggestFeature} variant="ghost" />
             </View>
           </View>
         </SafeAreaView>
@@ -395,6 +471,24 @@ const styles = StyleSheet.create({
   switcherCompact: {
     flexWrap: "wrap",
   },
+  compactTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  compactBrandWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  compactTopActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexShrink: 0,
+  },
+  compactHeaderButton: {
+    minHeight: 38,
+  },
   topBar: {
     paddingHorizontal: 16,
     paddingTop: 12,
@@ -407,6 +501,7 @@ const styles = StyleSheet.create({
   topBarCompact: {
     alignItems: "stretch",
     flexDirection: "column",
+    gap: 0,
   },
   currentEventButton: {
     maxWidth: 170,
