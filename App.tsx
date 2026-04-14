@@ -184,7 +184,7 @@ export default function App() {
   }
 
   function handleOpenPeopleFilter(status: PersonStatusMode) {
-    setPersonStatusMode(status);
+    setPersonStatusMode(status || "all");
     setPersonStatusNonce((value) => value + 1);
     setScreen("person");
   }

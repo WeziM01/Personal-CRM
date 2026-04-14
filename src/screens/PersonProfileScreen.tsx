@@ -134,8 +134,8 @@ export function PersonProfileScreen({
     if (selectedPersonId) {
       return filteredPeople.find((person) => person.id === selectedPersonId) || null;
     }
-
-    return isCompactLayout ? null : filteredPeople[0] || null;
+    // Only show a selected contact if the user has manually selected one
+    return null;
   }, [filteredPeople, isCompactLayout, selectedPersonId]);
 
   async function loadProfileData() {

@@ -180,34 +180,29 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
             <Pressable style={styles.liveEventPill}>
               <Typography variant="body" style={{ color: '#1ecb4f' }}>🟢 Live: {currentEvent.name}</Typography>
             </Pressable>
-          ) : (
-            <Pressable style={styles.liveEventPill}>
-              <Typography variant="body">+ Set Active Event</Typography>
-            </Pressable>
-          )}
+          ) : null}
         </View>
-        <View style={styles.signalsRow}>
-          <Pressable style={styles.signalMiniCard} onPress={() => setActiveSignal("tracked")}> 
-            <Typography variant="h2">{people.length}</Typography>
-            <Typography variant="caption">👥 Total</Typography>
-          </Pressable>
-          <Pressable style={styles.signalMiniCard} onPress={() => setActiveSignal("contactedToday")}> 
-            <Typography variant="h2">{contactedTodayPeople.length}</Typography>
-            <Typography variant="caption">🟢 Today</Typography>
-          </Pressable>
-          <Pressable style={styles.signalMiniCard} onPress={() => {
-            setActiveSignal("needNudge");
-            onOpenPeopleFilter?.("stale");
-          }}>
-            <Typography variant="h2">{people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).length}</Typography>
-            <Typography variant="caption">⚠️ Nudges</Typography>
-          </Pressable>
-        </View>
-        {/* ...existing ScrollView and content below, but signals and header are now above */}
         <ScrollView
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
+          <View style={styles.signalsRow}>
+            <Pressable style={styles.signalMiniCard} onPress={() => setActiveSignal("tracked")}> 
+              <Typography variant="h2">{people.length}</Typography>
+              <Typography variant="caption">👥 Total</Typography>
+            </Pressable>
+            <Pressable style={styles.signalMiniCard} onPress={() => setActiveSignal("contactedToday")}> 
+              <Typography variant="h2">{contactedTodayPeople.length}</Typography>
+              <Typography variant="caption">🟢 Today</Typography>
+            </Pressable>
+            <Pressable style={styles.signalMiniCard} onPress={() => {
+              setActiveSignal("needNudge");
+              onOpenPeopleFilter?.("stale");
+            }}>
+              <Typography variant="h2">{people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).length}</Typography>
+              <Typography variant="caption">⚠️ Nudges</Typography>
+            </Pressable>
+          </View>
 
           {errorMessage ? (
             <Card>
