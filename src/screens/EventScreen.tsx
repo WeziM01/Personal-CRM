@@ -355,26 +355,18 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={[styles.headerRow, isCompactLayout ? styles.headerRowCompact : null]}>
             <View style={styles.headerCopy}>
-              <Typography variant="caption">Events</Typography>
-              <Typography variant="h1">Treat events like first-class records, not just tags on people.</Typography>
+              <Typography variant="h1">Events</Typography>
             </View>
-            {!isCompactLayout ? <View style={styles.headerActions}>
-              <Button
-                label="Add event"
-                onPress={openCreateEvent}
-                fullWidth={false}
-                variant="ghost"
-              />
-              <Button
-                label="Log event contact"
-                onPress={openGeneralCapture}
-                fullWidth={false}
-              />
-            </View> : null}
+            <Button
+              label="Add event"
+              onPress={openCreateEvent}
+              fullWidth={false}
+              variant="primary"
+              style={styles.addEventButton}
+            />
           </View>
 
           <Card>
-            <Typography variant="caption">Last event</Typography>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
               {EVENT_CATEGORY_OPTIONS.map((option) => (
                 <Button
@@ -419,9 +411,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               />
             </View>
 
-            <Typography variant="caption" style={styles.subSectionLabel}>
-              Search
-            </Typography>
             <TextInput
               placeholder="Search event name"
               placeholderTextColor={colors.textTertiary}
@@ -441,15 +430,14 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
 
           {selectedEvent ? (
             <Card style={styles.featureCard}>
-              <Typography variant="caption">Selected event</Typography>
-              <Typography variant="h1">{selectedEvent.name}</Typography>
-              <Typography variant="body" style={styles.secondaryText}>
+              <Typography variant="h2">{selectedEvent.name}</Typography>
+              <Typography variant="caption" style={styles.secondaryText}>
                 {formatCategoryLabel(selectedEvent.category)} · {selectedEvent.interactionCount} notes · {selectedEvent.peopleCount} people
               </Typography>
               <Typography variant="caption">{selectedEvent.lastConnectedLabel}</Typography>
               <View style={styles.featureActions}>
                 <Button
-                  label="Log contact here"
+                  label="Log contact"
                   onPress={openSelectedEventCapture}
                   fullWidth={false}
                   size="compact"
@@ -468,16 +456,12 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           ) : null}
 
           <View style={styles.sectionHeader}>
-            <Typography variant="caption">Grouped by category</Typography>
-            <Typography variant="body" style={styles.secondaryText}>
-              Tap an event to inspect it, then edit, delete, or log people straight into it.
-            </Typography>
+            <Typography variant="caption">All events</Typography>
           </View>
 
           <View style={styles.peopleStack}>
             {groupedEvents.map((group) => (
               <View key={group.category} style={styles.groupSection}>
-                <Typography variant="h2">{formatCategoryLabel(group.category as never)}</Typography>
                 {group.items.map((event) => (
                   <Pressable key={event.id} onPress={() => setSelectedEventId(event.id)}>
                     <Card
@@ -487,15 +471,13 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                       ]}
                     >
                       <View style={styles.eventHeader}>
-                        <View style={styles.eventCopy}>
-                          <Typography variant="h2">{event.name}</Typography>
-                          <Typography variant="caption">{event.lastConnectedLabel}</Typography>
-                        </View>
-                        <Typography variant="caption">{event.interactionCount} notes</Typography>
+                        <Typography variant="body" style={styles.secondaryText}>
+                          {formatCategoryLabel(event.category as never)}
+                        </Typography>
+                        <Typography variant="caption">{event.lastConnectedLabel}</Typography>
                       </View>
-                      <Typography variant="body" style={styles.secondaryText}>
-                        {event.peopleCount} people logged · {event.featuredPeople.join(", ") || "No people yet"}
-                      </Typography>
+                      <Typography variant="h2">{event.name}</Typography>
+                      <Typography variant="caption">{event.interactionCount} notes · {event.peopleCount} people</Typography>
                     </Card>
                   </Pressable>
                 ))}
@@ -518,6 +500,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               )
             ) : null}
           </View>
+
 
           <View style={styles.sectionHeader}>
             <Typography variant="caption">People linked to this event</Typography>
@@ -769,5 +752,9 @@ const styles = StyleSheet.create({
   footerButtons: {
     gap: 10,
     marginTop: "auto",
+  },
+  addEventButton: {
+    marginLeft: 8,
+    minWidth: 110,
   },
 });

@@ -172,22 +172,42 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
+        <View style={styles.headerRow}>
+          <Typography variant="h1">Blackbook</Typography>
+        </View>
+        <View style={styles.liveEventRow}>
+          {currentEvent ? (
+            <Pressable style={styles.liveEventPill}>
+              <Typography variant="body" style={{ color: '#1ecb4f' }}>🟢 Live: {currentEvent.name}</Typography>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.liveEventPill}>
+              <Typography variant="body">+ Set Active Event</Typography>
+            </Pressable>
+          )}
+        </View>
+        <View style={styles.signalsRow}>
+          <Pressable style={styles.signalMiniCard} onPress={() => setActiveSignal("tracked")}> 
+            <Typography variant="h2">{people.length}</Typography>
+            <Typography variant="caption">👥 Total</Typography>
+          </Pressable>
+          <Pressable style={styles.signalMiniCard} onPress={() => setActiveSignal("contactedToday")}> 
+            <Typography variant="h2">{contactedTodayPeople.length}</Typography>
+            <Typography variant="caption">🟢 Today</Typography>
+          </Pressable>
+          <Pressable style={styles.signalMiniCard} onPress={() => {
+            setActiveSignal("needNudge");
+            onOpenPeopleFilter?.("stale");
+          }}>
+            <Typography variant="h2">{people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).length}</Typography>
+            <Typography variant="caption">⚠️ Nudges</Typography>
+          </Pressable>
+        </View>
+        {/* ...existing ScrollView and content below, but signals and header are now above */}
         <ScrollView
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          <View style={[styles.heroRow, isCompactLayout ? styles.heroRowCompact : null]}>
-            <View style={styles.heroCopy}>
-              <Typography variant="caption">Black Book</Typography>
-              <Typography variant="h1">Making follow-ups with connections easier than ever.</Typography>
-            </View>
-            <Button
-              label="Add person"
-              onPress={() => setCaptureOpen(true)}
-              fullWidth={isCompactLayout}
-              style={isCompactLayout ? styles.heroActionCompact : null}
-            />
-          </View>
 
           {errorMessage ? (
             <Card>
@@ -376,6 +396,38 @@ const styles = StyleSheet.create({
     paddingTop: layout.stackGap,
     paddingBottom: 120,
     gap: 18,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  liveEventRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  liveEventPill: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    alignSelf: "flex-start",
+    marginBottom: 4,
+  },
+  signalsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 12,
+  },
+  signalMiniCard: {
+    flex: 1,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: 14,
+    padding: 12,
+    alignItems: "center",
+    gap: 2,
   },
   heroRow: {
     flexDirection: "row",

@@ -4,14 +4,17 @@ import { HomeScreen } from "../screens/HomeScreen";
 import { PersonProfileScreen } from "../screens/PersonProfileScreen";
 import { EventScreen } from "../screens/EventScreen";
 import { Ionicons } from "@expo/vector-icons";
+import { Pressable } from "react-native";
+import { MaterialIcons } from "@expo/vector-icons";
 
 const Tab = createBottomTabNavigator();
 
 export function BottomTabNavigator() {
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: false,
+      screenOptions={({ route, navigation }) => ({
+        headerShown: true,
+        headerTitleAlign: "left",
         tabBarShowLabel: true,
         tabBarIcon: ({ color, size }) => {
           let iconName = "";
@@ -20,6 +23,15 @@ export function BottomTabNavigator() {
           else if (route.name === "Events") iconName = "calendar-outline";
           return <Ionicons name={iconName as any} size={size} color={color} />;
         },
+        headerRight: () => (
+          <Pressable
+            style={{ marginRight: 18 }}
+            onPress={() => {/* TODO: open settings/profile modal */}}
+            accessibilityLabel="Settings"
+          >
+            <MaterialIcons name="settings" size={24} color="#222" />
+          </Pressable>
+        ),
       })}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
