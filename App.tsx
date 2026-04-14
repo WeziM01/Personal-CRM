@@ -99,25 +99,14 @@ export default function App() {
     return <AuthScreen />;
   }
 
-  async function handleReportBug() {
-    const subject = "Bug Report - Personal CRM MVP";
-    const body = [
-      "What happened?",
-      "",
-      return (
-        <NavigationContainer>
-          <BottomTabNavigator />
-          <StatusBar style="dark" />
-        </NavigationContainer>
-      );
-    }
-      {currentEvent ? (
-        <View style={styles.currentEventBar}>
-          <Button
-            label={`Live event: ${currentEvent.name} · ${formatCategoryLabel(currentEvent.category)}`}
-            onPress={() => setCurrentEventOpen(true)}
-            variant="ghost"
-            fullWidth={false}
+  // ...existing code...
+              // Only the navigation return should be present at the end
+              return (
+                <NavigationContainer>
+                  <BottomTabNavigator />
+                  <StatusBar style="dark" />
+                </NavigationContainer>
+              );
             size="compact"
           />
           <Button
