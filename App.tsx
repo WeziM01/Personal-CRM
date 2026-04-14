@@ -1,44 +1,30 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
-import { Alert, Linking, Modal, SafeAreaView, Share, StyleSheet, View, useWindowDimensions } from "react-native";
-
+import { Alert, Linking, Modal, SafeAreaView, Share, StyleSheet, View } from "react-native";
+import { NavigationContainer } from "@react-navigation/native";
+import { BottomTabNavigator } from "./src/navigation/BottomTabNavigator";
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
-import { formatCategoryLabel } from "./src/lib/crm";
 import { getCurrentUsername, signInAsGuest, signOutCurrentUser } from "./src/lib/auth";
 import { supabaseConfigMessage } from "./src/lib/supabase";
 import { Button } from "./src/components/ui/Button";
 import { AuthScreen } from "./src/screens/AuthScreen";
-import { EventScreen } from "./src/screens/EventScreen";
-import { HomeScreen } from "./src/screens/HomeScreen";
-import { PersonProfileScreen, PersonStatusMode } from "./src/screens/PersonProfileScreen";
 import { useAuth } from "./src/hooks/useAuth";
 import { colors } from "./src/theme/tokens";
-
-type ScreenKey = "home" | "event" | "person";
 
 const EARLY_ACCESS_WAITLIST_URL = "https://tally.so/r/xXPNkd";
 
 export default function App() {
-  const { width } = useWindowDimensions();
-  const isCompactLayout = width < 880;
-  const isVeryCompactLayout = width < 520;
   const { user, isLoading } = useAuth();
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
   const [isAccountMenuOpen, setAccountMenuOpen] = useState(false);
-  const [isNavMenuOpen, setNavMenuOpen] = useState(false);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
-  const [screen, setScreen] = useState<ScreenKey>("home");
-  const [personStatusMode, setPersonStatusMode] = useState<PersonStatusMode>("all");
-  const [personStatusNonce, setPersonStatusNonce] = useState(0);
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
   const previousWasGuest = useRef(false);
 
   const isGuest = Boolean(user?.is_anonymous);
-  const guestBannerLabel = isCompactLayout ? "Guest mode active" : "Guest mode active · data is temporary";
-  const updatesBannerLabel = isCompactLayout ? "Click here for future news" : "Click here for future news";
 
   if (supabaseConfigMessage) {
     return (
@@ -118,207 +104,13 @@ export default function App() {
     const body = [
       "What happened?",
       "",
-      "What did you expect to happen?",
-      "",
-      "Steps to reproduce:",
-      "1. ",
-      "2. ",
-      "3. ",
-      "",
-      `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
-    ].join("\n");
-    const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-    try {
-      await Linking.openURL(url);
-      setSettingsOpen(false);
-    } catch {
-      try {
-        await Share.share({
-          title: subject,
-          message: `${subject}\n\n${body}`,
-        });
-        setSettingsOpen(false);
-      } catch {
-        Alert.alert("Could not open bug report", "Please try again in a moment.");
-      }
+      return (
+        <NavigationContainer>
+          <BottomTabNavigator />
+          <StatusBar style="dark" />
+        </NavigationContainer>
+      );
     }
-  }
-
-  async function handleSuggestFeature() {
-    const subject = "Feature Request - Personal CRM MVP";
-    const body = [
-      "What would you like the app to do?",
-      "",
-      "Why would it help?",
-      "",
-      "When would you use it?",
-      "",
-      `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
-    ].join("\n");
-    const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-    try {
-      await Linking.openURL(url);
-      setSettingsOpen(false);
-    } catch {
-      try {
-        await Share.share({
-          title: subject,
-          message: `${subject}\n\n${body}`,
-        });
-        setSettingsOpen(false);
-      } catch {
-        Alert.alert("Could not open feature request", "Please try again in a moment.");
-      }
-    }
-  }
-
-  async function handleOpenWaitlist() {
-    try {
-      await Linking.openURL(EARLY_ACCESS_WAITLIST_URL);
-      setSettingsOpen(false);
-    } catch {
-      Alert.alert("Unable to open link", "Please try again in a moment.");
-    }
-  }
-
-  function handleOpenPeopleFilter(status: PersonStatusMode) {
-    setPersonStatusMode(status);
-    setPersonStatusNonce((value) => value + 1);
-    setScreen("person");
-  }
-
-  async function handleLogout() {
-    try {
-      await signOutCurrentUser();
-      await signInAsGuest();
-    } finally {
-      setAccountMenuOpen(false);
-      setNavMenuOpen(false);
-    }
-  }
-
-  function openAccountArea() {
-    setNavMenuOpen(false);
-
-    if (isGuest) {
-      setAuthModalOpen(true);
-      return;
-    }
-
-    setAccountMenuOpen(true);
-  }
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      {isCompactLayout ? (
-        <View style={[styles.topBar, styles.topBarCompact]}
-        >
-          <View style={styles.compactTopRow}>
-            <View style={styles.compactBrandWrap}>
-              <Typography variant="caption">Blackbook</Typography>
-              <Typography variant="h2">{screen === "home" ? "Home" : screen === "event" ? "Events" : "People"}</Typography>
-            </View>
-            <View style={styles.compactTopActions}>
-              <Button
-                label={currentEvent ? (isVeryCompactLayout ? "Event" : "Current event") : "Set event"}
-                onPress={() => setCurrentEventOpen(true)}
-                variant="ghost"
-                fullWidth={false}
-                size="compact"
-                style={styles.compactHeaderButton}
-              />
-              <Button
-                label="Menu"
-                onPress={() => setNavMenuOpen(true)}
-                variant="ghost"
-                fullWidth={false}
-                size="compact"
-                style={styles.compactHeaderButton}
-              />
-            </View>
-          </View>
-        </View>
-      ) : (
-        <View style={styles.topBar}>
-          <View>
-            <Button
-              label="Home"
-              onPress={() => setScreen("home")}
-              variant={screen === "home" ? "primary" : "ghost"}
-              fullWidth={false}
-              size="compact"
-              style={styles.switchButton}
-            />
-          </View>
-          <View style={styles.switcher}>
-            <Button
-              label={isGuest ? "Guest" : `@${currentUsername || "member"}`}
-              onPress={openAccountArea}
-              variant="ghost"
-              fullWidth={false}
-              size="compact"
-              style={styles.switchButton}
-            />
-            <Button
-              label={currentEvent ? `Current: ${currentEvent.name}` : "Set Current Event"}
-              onPress={() => setCurrentEventOpen(true)}
-              variant="ghost"
-              fullWidth={false}
-              size="compact"
-              style={styles.currentEventButton}
-            />
-            <Button
-              label="Events"
-              onPress={() => setScreen("event")}
-              variant={screen === "event" ? "primary" : "ghost"}
-              fullWidth={false}
-              size="compact"
-              style={styles.switchButton}
-            />
-            <Button
-              label="People"
-              onPress={() => setScreen("person")}
-              variant={screen === "person" ? "primary" : "ghost"}
-              fullWidth={false}
-              size="compact"
-              style={styles.switchButton}
-            />
-            <Button
-              label="Settings"
-              onPress={() => setSettingsOpen(true)}
-              variant="ghost"
-              fullWidth={false}
-              size="compact"
-              style={styles.switchButton}
-            />
-          </View>
-        </View>
-      )}
-
-      {isGuest ? (
-        <View style={styles.currentEventBar}>
-          <Button
-            label={guestBannerLabel}
-            onPress={() => setAuthModalOpen(true)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-          />
-        </View>
-      ) : null}
-
-      <View style={styles.currentEventBar}>
-        <Button
-          label={updatesBannerLabel}
-          onPress={handleOpenWaitlist}
-          variant="ghost"
-          fullWidth={false}
-          size="compact"
-        />
-      </View>
-
       {currentEvent ? (
         <View style={styles.currentEventBar}>
           <Button
