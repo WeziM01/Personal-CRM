@@ -121,6 +121,14 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     });
   }, [interactions, people, selectedCategory, selectedEvent, sortMode]);
 
+  const selectedEventFollowUpSummary = useMemo(() => {
+    return {
+      dueToday: filteredPeople.filter((person) => person.followUpState === "dueToday").length,
+      overdue: filteredPeople.filter((person) => person.followUpState === "overdue").length,
+      upcoming: filteredPeople.filter((person) => person.followUpState === "upcoming").length,
+    };
+  }, [filteredPeople]);
+
   const groupedEvents = useMemo(() => {
     const groups = new Map<string, typeof filteredEvents>();
 
@@ -332,7 +340,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         userId,
         personId: person.id,
         eventId: linkedEventId,
-        rawNote: buildInteractionRecord(draft.notes, draft.followUp, draft.company),
+        rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
       setCaptureOpen(false);
@@ -434,6 +442,9 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               <Typography variant="caption" style={styles.secondaryText}>
                 {formatCategoryLabel(selectedEvent.category)} · {selectedEvent.interactionCount} notes · {selectedEvent.peopleCount} people
               </Typography>
+              <Typography variant="caption">
+                Due today {selectedEventFollowUpSummary.dueToday} · Overdue {selectedEventFollowUpSummary.overdue} · Upcoming {selectedEventFollowUpSummary.upcoming}
+              </Typography>
               <Typography variant="caption">{selectedEvent.lastConnectedLabel}</Typography>
               <View style={styles.featureActions}>
                 <Button
@@ -525,8 +536,9 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                   <Typography variant="caption">{person.bannerLabel}</Typography>
                 </View>
                 <Typography variant="body" style={styles.valueBlock} numberOfLines={2}>
-                  {person.lastInteractionNote}
+                  {person.nextStep || person.whatMatters}
                 </Typography>
+                {person.nextFollowUpAt ? <Typography variant="caption">Follow up: {person.nextFollowUpLabel}</Typography> : null}
               </Card>
             ))}
             {!isLoading && filteredPeople.length === 0 ? (

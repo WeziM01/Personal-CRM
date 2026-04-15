@@ -41,10 +41,19 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
   const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
+  const dueTodayPeople = useMemo(
+    () => people.filter((person) => person.followUpState === "dueToday").slice(0, 4),
+    [people]
+  );
+  const overduePeople = useMemo(
+    () => people.filter((person) => person.followUpState === "overdue").slice(0, 4),
+    [people]
+  );
   const followUpPeople = useMemo(
     () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).slice(0, 4),
     [people]
   );
+  const waitingOnYouCount = dueTodayPeople.length + overduePeople.length;
   const contactedTodayPeople = useMemo(
     () => people.filter((person) => (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD),
     [people]
@@ -72,6 +81,18 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
         : activeSignal === "needNudge"
           ? "People who need a nudge"
           : "Recently connected";
+  const currentEventSummary = useMemo(() => {
+    if (!currentEvent) {
+      return null;
+    }
+
+    const linkedPeople = people.filter((person) => person.lastEventName === currentEvent.name);
+    return {
+      total: linkedPeople.length,
+      outstanding: linkedPeople.filter((person) => person.followUpState === "dueToday" || person.followUpState === "overdue").length,
+    };
+  }, [currentEvent, people]);
+
   const eventPulse = useMemo(() => {
     const counts = new Map<string, number>();
     events.forEach((event) => {
@@ -155,7 +176,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
         userId,
         personId: person.id,
         eventId,
-        rawNote: buildInteractionRecord(draft.notes, draft.followUp, draft.company),
+        rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
       setCaptureOpen(false);
@@ -208,6 +229,85 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
             <Card>
               <Typography variant="body">{errorMessage}</Typography>
             </Card>
+          ) : null}
+
+          {waitingOnYouCount ? (
+            <Card style={styles.bannerCard}>
+              <Typography variant="h2">{waitingOnYouCount} people are waiting on you</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Due today and overdue follow-ups are surfaced here first.
+              </Typography>
+            </Card>
+          ) : null}
+
+          {dueTodayPeople.length ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Typography variant="caption">Due today</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  Follow-ups scheduled for today.
+                </Typography>
+              </View>
+              {dueTodayPeople.map((person) => (
+                <Card key={`due-${person.id}`} style={styles.followCard}>
+                  <View style={styles.connectionHeader}>
+                    <View style={styles.connectionMain}>
+                      <Typography variant="h2">{person.name}</Typography>
+                      {person.company ? <Typography variant="caption">{person.company}</Typography> : null}
+                    </View>
+                    <Typography variant="caption">{person.nextFollowUpLabel}</Typography>
+                  </View>
+                  <Typography variant="body" style={styles.cardBody}>
+                    {person.nextStep || person.whatMatters}
+                  </Typography>
+                </Card>
+              ))}
+            </View>
+          ) : null}
+
+          {overduePeople.length ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Typography variant="caption">Overdue</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  These follow-ups have slipped past their planned date.
+                </Typography>
+              </View>
+              {overduePeople.map((person) => (
+                <Card key={`overdue-${person.id}`} style={styles.followCard}>
+                  <View style={styles.connectionHeader}>
+                    <View style={styles.connectionMain}>
+                      <Typography variant="h2">{person.name}</Typography>
+                      {person.company ? <Typography variant="caption">{person.company}</Typography> : null}
+                    </View>
+                    <Typography variant="caption">{person.nextFollowUpLabel}</Typography>
+                  </View>
+                  <Typography variant="body" style={styles.cardBody}>
+                    {person.nextStep || person.whatMatters}
+                  </Typography>
+                </Card>
+              ))}
+            </View>
+          ) : null}
+
+          {currentEventSummary ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Typography variant="caption">From current event</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  {currentEventSummary && currentEvent ? (
+                    <View style={styles.section}>
+                    <View style={styles.sectionHeader}>
+                      <Typography variant="caption">From current event</Typography>
+                      <Typography variant="body" style={styles.sectionMeta}>
+                        {currentEvent.name} . {currentEventSummary.total} people added . {currentEventSummary.outstanding} still need a follow-up.
+                      </Typography>
+                    </View>
+                    </View>
+                  ) : null}
+                </Typography>
+              </View>
+            </View>
           ) : null}
 
           <Card style={styles.heroCard}>
@@ -440,6 +540,9 @@ const styles = StyleSheet.create({
   },
   heroActionCompact: {
     width: "100%",
+  },
+  bannerCard: {
+    gap: 10,
   },
   heroCard: {
     backgroundColor: colors.primaryAction,

@@ -183,8 +183,10 @@ export function PersonProfileScreen({
       linkedinUrl: person.linkedinUrl,
       phoneNumber: person.phoneNumber,
       event: person.lastEventName || "",
-      notes: "",
-      followUp: "",
+      whatMatters: "",
+      nextStep: "",
+      nextFollowUpAt: "",
+      followUpPreset: "",
     });
     setCaptureOpen(true);
   }
@@ -219,8 +221,10 @@ export function PersonProfileScreen({
       phoneNumber: "",
       event: currentEvent?.name || "",
       eventCategory: currentEvent?.category || "",
-      notes: "",
-      followUp: "",
+      whatMatters: "",
+      nextStep: "",
+      nextFollowUpAt: "",
+      followUpPreset: "",
     });
     setCaptureOpen(true);
   }
@@ -250,8 +254,10 @@ export function PersonProfileScreen({
       linkedinUrl: person.linkedinUrl,
       phoneNumber: person.phoneNumber,
       event: person.lastEventName || "",
-      notes: person.lastInteractionNote,
-      followUp: "",
+      whatMatters: person.whatMatters || person.lastInteractionNote,
+      nextStep: person.nextStep || "",
+      nextFollowUpAt: person.nextFollowUpAt || "",
+      followUpPreset: "",
     });
     setCaptureOpen(true);
   }
@@ -261,8 +267,8 @@ export function PersonProfileScreen({
       return;
     }
 
-    if (editorMode === "createInteraction" && !draft.notes.trim()) {
-      Alert.alert("Notes required", "Describe the interaction before saving.");
+    if (editorMode === "createInteraction" && !draft.whatMatters.trim() && !draft.nextStep.trim()) {
+      Alert.alert("Context required", "Add what matters or the next step before saving.");
       return;
     }
 
@@ -288,7 +294,7 @@ export function PersonProfileScreen({
           eventId = (await getOrCreateEvent(userId, editEventName, draft.eventCategory || null)).id;
         }
 
-        const rawNote = buildInteractionRecord(draft.notes, "", draft.company);
+        const rawNote = buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt);
 
         if (selectedPerson.lastInteractionId) {
           await updateInteraction({
@@ -353,7 +359,7 @@ export function PersonProfileScreen({
         userId,
         personId: activePersonId,
         eventId,
-        rawNote: buildInteractionRecord(draft.notes, "", draft.company),
+        rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
       setCaptureOpen(false);

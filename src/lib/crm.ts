@@ -43,6 +43,7 @@ export type EventCategory =
   | "other";
 
 export type PersonPriority = "high" | "medium" | "low";
+export type FollowUpPreset = "tomorrow" | "in3days" | "nextWeek" | "custom";
 
 export type PersonInsight = {
   id: string;
@@ -57,6 +58,11 @@ export type PersonInsight = {
   lastInteractionId: string | null;
   lastInteractionAt: string | null;
   lastInteractionNote: string;
+  whatMatters: string;
+  nextStep: string;
+  nextFollowUpAt: string | null;
+  nextFollowUpLabel: string;
+  followUpState: "none" | "upcoming" | "dueToday" | "overdue";
   lastEventName: string | null;
   lastEventCategory: EventCategory;
   followUp: string;
@@ -106,6 +112,102 @@ export const EVENT_CATEGORY_OPTIONS: Array<{ label: string; value: EventCategory
   { label: "Community", value: "community" },
   { label: "Other", value: "other" },
 ];
+
+function startOfDay(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+export function toDateOnlyString(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function parseDateOnlyString(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+export function getSuggestedFollowUpPreset(category?: EventCategory | "" | null): FollowUpPreset {
+  if (category === "networking" || category === "conference" || category === "investor") {
+    return "tomorrow";
+  }
+
+  if (category === "coffee") {
+    return "in3days";
+  }
+
+  if (category === "workshop" || category === "community") {
+    return "nextWeek";
+  }
+
+  return "in3days";
+}
+
+export function getPresetDate(preset: FollowUpPreset, baseDate = new Date()) {
+  const seed = startOfDay(baseDate);
+  const next = new Date(seed);
+
+  if (preset === "tomorrow") {
+    next.setDate(next.getDate() + 1);
+    return toDateOnlyString(next);
+  }
+
+  if (preset === "in3days") {
+    next.setDate(next.getDate() + 3);
+    return toDateOnlyString(next);
+  }
+
+  if (preset === "nextWeek") {
+    next.setDate(next.getDate() + 7);
+    return toDateOnlyString(next);
+  }
+
+  return toDateOnlyString(next);
+}
+
+export function formatFollowUpDate(value?: string | null) {
+  const parsed = parseDateOnlyString(value);
+  if (!parsed) {
+    return "No follow-up date";
+  }
+
+  return parsed.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function getFollowUpState(nextFollowUpAt?: string | null): PersonInsight["followUpState"] {
+  const parsed = parseDateOnlyString(nextFollowUpAt);
+  if (!parsed) {
+    return "none";
+  }
+
+  const target = startOfDay(parsed).getTime();
+  const today = startOfDay().getTime();
+
+  if (target < today) {
+    return "overdue";
+  }
+
+  if (target === today) {
+    return "dueToday";
+  }
+
+  return "upcoming";
+}
+
 
 const eventCategoryMatchers: Array<{ category: EventCategory; patterns: RegExp[] }> = [
   {
@@ -503,12 +605,16 @@ export async function listPeopleInsights(userId: string) {
       : null;
     const priority = normalizePriority(person.priority, person.is_vip);
     const tags = normalizeTags(person.tags);
+    const rawNote = lastInteraction?.raw_note || "";
+    const whatMatters = extractPrimaryNote(rawNote) || "No interactions yet.";
+    const nextStep = extractNextStep(rawNote);
+    const nextFollowUpAt = extractFollowUpDate(rawNote);
 
     return {
       id: person.id,
       name: person.name || "Unknown contact",
       priority,
-      company: person.company || extractCompany(lastInteraction?.raw_note || ""),
+      company: person.company || extractCompany(rawNote),
       linkedinUrl: person.linkedin_url || "",
       phoneNumber: person.phone_number || "",
       tags,
@@ -516,17 +622,22 @@ export async function listPeopleInsights(userId: string) {
       interactionCount: personInteractions.length,
       lastInteractionId: lastInteraction?.id || null,
       lastInteractionAt: lastInteraction?.created_at || null,
-      lastInteractionNote: extractPrimaryNote(lastInteraction?.raw_note || "") || "No interactions yet.",
+      lastInteractionNote: whatMatters,
+      whatMatters,
+      nextStep,
+      nextFollowUpAt,
+      nextFollowUpLabel: nextFollowUpAt ? formatFollowUpDate(nextFollowUpAt) : "No follow-up date",
+      followUpState: getFollowUpState(nextFollowUpAt),
       lastEventName: lastInteraction?.events?.name || null,
       lastEventCategory: inferEventCategory(
         lastInteraction?.events?.name,
-        lastInteraction?.raw_note,
+        rawNote,
         lastInteraction?.events?.category || null
       ),
-      followUp: extractFollowUp(lastInteraction?.raw_note || ""),
+      followUp: nextStep || "No next step yet",
       daysSinceLastContact,
-      statusLabel: buildContactStatus(daysSinceLastContact, priority),
-      bannerLabel: buildContactBanner(daysSinceLastContact, priority),
+      statusLabel: buildContactStatus(daysSinceLastContact, priority, nextFollowUpAt),
+      bannerLabel: buildContactBanner(daysSinceLastContact, priority, nextFollowUpAt),
     } as PersonInsight;
   });
 }
@@ -588,10 +699,8 @@ export async function countInteractionsByEvent(userId: string, eventId: string) 
   return count || 0;
 }
 
-export function buildInteractionNote(notes: string, followUp: string) {
-  const base = notes.trim();
-  const hasFollowUp = followUp.trim() && followUp.trim().toLowerCase() !== "none yet";
-  return hasFollowUp ? `${base}\nFollow up: ${followUp.trim()}` : base;
+export function buildInteractionNote(whatMatters: string, nextStep: string, nextFollowUpAt?: string) {
+  return buildInteractionRecord(whatMatters, nextStep, undefined, nextFollowUpAt);
 }
 
 export function normalizeLinkedInUrl(value?: string | null) {
@@ -626,15 +735,19 @@ export function toWhatsAppUrl(phoneNumber: string) {
   return normalized ? `https://wa.me/${normalized}` : null;
 }
 
-export function buildInteractionRecord(notes: string, followUp: string, company?: string) {
+export function buildInteractionRecord(whatMatters: string, nextStep: string, company?: string, nextFollowUpAt?: string) {
   const lines: string[] = [];
 
-  if (notes.trim()) {
-    lines.push(notes.trim());
+  if (whatMatters.trim()) {
+    lines.push(whatMatters.trim());
   }
 
-  if (followUp.trim() && followUp.trim().toLowerCase() !== "none yet") {
-    lines.push(`Follow up: ${followUp.trim()}`);
+  if (nextStep.trim() && nextStep.trim().toLowerCase() !== "none yet") {
+    lines.push(`Next step: ${nextStep.trim()}`);
+  }
+
+  if (nextFollowUpAt?.trim()) {
+    lines.push(`Follow up date: ${nextFollowUpAt.trim()}`);
   }
 
   return lines.join("\n");
@@ -645,20 +758,40 @@ export function extractCompany(rawNote: string) {
   return match?.[1]?.trim() || "";
 }
 
-export function extractPrimaryNote(rawNote: string) {
+function stripInteractionMetadata(rawNote: string) {
   return rawNote
-    .replace(/^Company:\s*.+$/im, "")
-    .replace(/^Follow up:\s*.+$/im, "")
+    .replace(/^Company:\s*.+$/gim, "")
+    .replace(/^Next\s*step:\s*.+$/gim, "")
+    .replace(/^Follow\s*up\s*date:\s*.+$/gim, "")
+    .replace(/^Follow\s*up:\s*.+$/gim, "")
     .trim();
 }
 
-export function extractFollowUp(rawNote: string) {
-  const match = rawNote.match(/follow\s*up\s*[:.-]\s*(.+)$/im);
-  if (!match?.[1]) {
-    return "None yet";
+export function extractPrimaryNote(rawNote: string) {
+  return stripInteractionMetadata(rawNote);
+}
+
+export function extractNextStep(rawNote: string) {
+  const nextStepMatch = rawNote.match(/^Next\s*step:\s*(.+)$/im);
+  if (nextStepMatch?.[1]) {
+    return nextStepMatch[1].trim();
   }
 
-  return match[1].trim();
+  const legacyMatch = rawNote.match(/follow\s*up\s*[:.-]\s*(.+)$/im);
+  if (legacyMatch?.[1]) {
+    return legacyMatch[1].trim();
+  }
+
+  return "";
+}
+
+export function extractFollowUp(rawNote: string) {
+  return extractNextStep(rawNote) || "None yet";
+}
+
+export function extractFollowUpDate(rawNote: string) {
+  const match = rawNote.match(/^Follow\s*up\s*date:\s*(\d{4}-\d{2}-\d{2})$/im);
+  return match?.[1] || null;
 }
 
 export function inferEventCategory(
@@ -706,7 +839,20 @@ export function getDaysSince(value: string) {
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
 }
 
-export function buildContactStatus(daysSinceLastContact: number | null, priority: PersonPriority = "medium") {
+export function buildContactStatus(
+  daysSinceLastContact: number | null,
+  priority: PersonPriority = "medium",
+  nextFollowUpAt?: string | null
+) {
+  const followUpState = getFollowUpState(nextFollowUpAt);
+  if (followUpState === "overdue") {
+    return "Overdue";
+  }
+
+  if (followUpState === "dueToday") {
+    return "Due today";
+  }
+
   if (daysSinceLastContact === null) {
     return "No contact yet";
   }
@@ -726,7 +872,24 @@ export function buildContactStatus(daysSinceLastContact: number | null, priority
   return "Needs follow-up";
 }
 
-export function buildContactBanner(daysSinceLastContact: number | null, priority: PersonPriority = "medium") {
+export function buildContactBanner(
+  daysSinceLastContact: number | null,
+  priority: PersonPriority = "medium",
+  nextFollowUpAt?: string | null
+) {
+  const followUpState = getFollowUpState(nextFollowUpAt);
+  if (followUpState === "overdue") {
+    return `Follow-up overdue since ${formatFollowUpDate(nextFollowUpAt)}`;
+  }
+
+  if (followUpState === "dueToday") {
+    return `Follow up today · ${formatFollowUpDate(nextFollowUpAt)}`;
+  }
+
+  if (followUpState === "upcoming") {
+    return `Follow up on ${formatFollowUpDate(nextFollowUpAt)}`;
+  }
+
   if (daysSinceLastContact === null) {
     return "No contact on record yet";
   }
