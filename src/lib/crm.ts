@@ -476,13 +476,13 @@ export async function deleteEvent(userId: string, eventId: string) {
 export async function deletePerson(userId: string, personId: string) {
   const client = assertClient();
 
-  const { error: interactionDeleteError } = await client
+  const { error: interactionError } = await client
     .from("interactions")
     .delete()
     .eq("user_id", userId)
     .eq("person_id", personId);
 
-  assertNoError(interactionDeleteError);
+  assertNoError(interactionError);
 
   const { error } = await client
     .from("persons")

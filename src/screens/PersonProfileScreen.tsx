@@ -402,6 +402,9 @@ export function PersonProfileScreen({
       setDeleting(true);
       const userId = await ensureSessionUserId();
       await deletePerson(userId, person.id);
+      setPeople((current) => current.filter((entry) => entry.id !== person.id));
+      setSelectedPersonId((current) => (current === person.id ? null : current));
+      setPersonActionMenu((current) => (current?.id === person.id ? null : current));
       await loadProfileData();
       Alert.alert("Deleted", `${person.name} removed.`);
     } catch (error) {
@@ -417,17 +420,27 @@ export function PersonProfileScreen({
       return;
     }
 
+    const confirmDelete = () => {
+      void performDeletePerson(person);
+    };
+
+    if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+      const confirmed = window.confirm(`${person.name} will be removed permanently.`);
+      if (confirmed) {
+        confirmDelete();
+      }
+      return;
+    }
+
     Alert.alert(
       "Delete contact?",
-        `${person.name} will be removed permanently.`,
+      `${person.name} will be removed permanently.`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => {
-            void performDeletePerson(person);
-          },
+          onPress: confirmDelete,
         },
       ]
     );
@@ -454,6 +467,30 @@ export function PersonProfileScreen({
     });
   }
 
+  async function openWhatsAppOnWeb(browserUrl: string, personName: string) {
+    if (typeof window === "undefined") {
+      await Linking.openURL(browserUrl);
+      return;
+    }
+
+    try {
+      const openedWindow = window.open(browserUrl, "_blank", "noopener,noreferrer");
+      if (openedWindow) {
+        openedWindow.opener = null;
+        return;
+      }
+    } catch {
+      // fall through to same-tab navigation
+    }
+
+    try {
+      window.location.assign(browserUrl);
+      return;
+    } catch {
+      Alert.alert("Open failed", `Could not open WhatsApp Web for ${personName}.`);
+    }
+  }
+
   async function openDraftMessage(person = selectedPerson, messageOverride?: string) {
     if (!person) {
       return;
@@ -473,13 +510,13 @@ export function PersonProfileScreen({
 
     try {
       if (Platform.OS === "web") {
-        const browserUrl = whatsappApiUrl || whatsappWebUrl;
+        const browserUrl = whatsappWebUrl || whatsappApiUrl;
         if (!browserUrl) {
           Alert.alert("No WhatsApp number", `Add a phone number for ${person.name} before opening WhatsApp.`);
           return;
         }
 
-        window.open(browserUrl, "_blank", "noopener,noreferrer");
+        await openWhatsAppOnWeb(browserUrl, person.name);
         return;
       }
 
