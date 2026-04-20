@@ -744,7 +744,7 @@ export function PersonProfileScreen({
                   size="compact"
                 />
                 <Button
-                  label="Mark contacted today"
+                  label="Reached out"
                   onPress={() => handleMarkContactedToday(selectedPerson)}
                   fullWidth={false}
                   size="compact"
@@ -879,6 +879,7 @@ export function PersonProfileScreen({
           lockedEvent={editorMode === "edit" ? null : currentEvent}
           title={editorMode === "edit" ? "Edit Contact" : editorMode === "createPerson" ? "Add Person" : "Add Interaction"}
           saveLabel={editorMode === "edit" ? "Save Changes" : editorMode === "createPerson" ? "Save Person" : "Save Interaction"}
+          showQuickCapture={editorMode === "createPerson"}
         />
 
         {isInteractionPickerOpen ? (

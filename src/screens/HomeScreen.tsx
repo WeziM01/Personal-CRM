@@ -79,7 +79,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     activeSignal === "tracked"
       ? "People tracked"
       : activeSignal === "contactedToday"
-        ? "Contacted today"
+        ? "Reached out today"
         : activeSignal === "needNudge"
           ? "People who need a nudge"
           : "Recently connected";
@@ -192,6 +192,10 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     }
   }
 
+  function openCapture() {
+    setCaptureOpen(true);
+  }
+
   function renderPersonCard(person: (typeof people)[number], variant: "default" | "muted" = "default") {
     return (
       <Card key={person.id} style={[styles.connectionCard, variant === "muted" ? styles.mutedCard : null]}>
@@ -230,6 +234,8 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
               </Typography>
             </View>
           </View>
+
+
 
           {currentEvent ? (
             <Card style={styles.currentEventCard}>
@@ -286,7 +292,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                 }}
               >
                 <Typography variant="h2" style={styles.heroMetric}>{contactedTodayPeople.length}</Typography>
-                <Typography variant="caption" style={styles.heroCaption}>Contacted today</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>Reached out</Typography>
               </Pressable>
               <Pressable
                 style={[styles.signalCell, activeSignal === "needNudge" ? styles.signalCellActive : null]}
@@ -406,7 +412,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           </View>
         </ScrollView>
 
-        <FloatingFab label="+" onPress={() => setCaptureOpen(true)} />
+        <FloatingFab label="+" onPress={openCapture} />
 
         <CaptureModal
           visible={isCaptureOpen}
@@ -414,6 +420,8 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           onSave={handleSaveDraft}
           isSaving={isSaving}
           lockedEvent={currentEvent}
+          initialMethod="manual"
+          showQuickCapture
         />
       </View>
     </SafeAreaView>
@@ -440,6 +448,20 @@ const styles = StyleSheet.create({
   },
   headerCopy: {
     gap: 8,
+  },
+  quickCaptureCard: {
+    gap: 14,
+  },
+  quickCaptureHeader: {
+    gap: 8,
+  },
+  quickCaptureCopy: {
+    gap: 6,
+  },
+  quickCaptureRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
   },
   currentEventCard: {
     backgroundColor: colors.surface,

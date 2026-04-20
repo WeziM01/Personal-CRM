@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Modal,
   Pressable,
   SafeAreaView,
@@ -24,6 +25,8 @@ import {
   PersonPriority,
 } from "../lib/crm";
 import { colors, layout, radius } from "../theme/tokens";
+
+export type QuickCaptureMethod = "manual" | "paste" | "voice" | "scan";
 
 export type ParsedPersonDraft = {
   name: string;
@@ -71,10 +74,20 @@ type CaptureModalProps = {
   isSaving?: boolean;
   initialDraft?: Partial<ParsedPersonDraft> | null;
   lockedEvent?: LockedEventDraft | null;
+  initialMethod?: QuickCaptureMethod;
+  showQuickCapture?: boolean;
 };
 
 function cleanValue(value: string) {
   return value.replace(/^[\s:,-]+|[\s:,-]+$/g, "").trim();
+}
+
+function titleCaseFromSlug(value: string) {
+  return value
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function buildDraftSentence(draft: ParsedPersonDraft) {
@@ -102,6 +115,95 @@ function getSuggestedPresetLabel(category: EventCategory | "" | null | undefined
   return "Custom";
 }
 
+function parsePastedInput(rawValue: string, lockedEvent?: LockedEventDraft | null) {
+  const raw = rawValue.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => cleanValue(line))
+    .filter(Boolean);
+
+  const linkedinMatch = raw.match(/https?:\/\/(?:[\w-]+\.)?linkedin\.com\/[\S]+/i);
+  const emailMatch = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  const phoneMatch = raw.match(/(?:\+?\d[\d\s().-]{7,}\d)/);
+  const metFromMatch = raw.match(/met\s+([^,.\n]+?)\s+from\s+([^,.\n]+?)(?:\s+at\s+([^,.\n]+))?(?:[,.\n]|$)/i);
+  const fromMatch = raw.match(/\bfrom\s+([^,.\n]+?)(?:\s+at\s+|[,.\n]|$)/i);
+  const companyLabelMatch = raw.match(/(?:company|org|organisation|organization)\s*[:\-]\s*([^\n]+)/i);
+  const eventMatch = raw.match(/(?:event|met at)\s*[:\-]?\s*([^\n]+)/i);
+
+  let name = "";
+  let company = "";
+  let event = lockedEvent?.name || "";
+  const linkedinUrl = linkedinMatch?.[0] || "";
+  const rawLooksLikeLinkedInOnly = Boolean(linkedinUrl) && lines.length <= 2 && !metFromMatch && !companyLabelMatch && !eventMatch;
+
+  if (metFromMatch) {
+    name = cleanValue(metFromMatch[1]);
+    company = cleanValue(metFromMatch[2]);
+    event = cleanValue(metFromMatch[3] || event);
+  }
+
+  if (!company && companyLabelMatch) {
+    company = cleanValue(companyLabelMatch[1]);
+  }
+
+  if (!company && fromMatch) {
+    company = cleanValue(fromMatch[1]);
+  }
+
+  if (!event && eventMatch) {
+    event = cleanValue(eventMatch[1]);
+  }
+
+  if (!name && linkedinUrl) {
+    const slugMatch = linkedinUrl.match(/linkedin\.com\/in\/([^/?#]+)/i);
+    if (slugMatch) {
+      name = titleCaseFromSlug(slugMatch[1]);
+    }
+  }
+
+  if (!name && emailMatch) {
+    const localPart = emailMatch[0].split("@")[0] || "";
+    const candidate = titleCaseFromSlug(localPart.replace(/\d+/g, ""));
+    if (candidate.split(" ").length <= 3) {
+      name = candidate;
+    }
+  }
+
+  if (!name && lines.length) {
+    const candidate = lines[0];
+    if (!candidate.includes("@") && !candidate.includes("http") && candidate.split(" ").length <= 4) {
+      name = candidate;
+    }
+  }
+
+  if (!company && lines.length > 1 && !rawLooksLikeLinkedInOnly) {
+    const candidate = lines[1];
+    if (!candidate.includes("@") && !candidate.includes("http") && candidate.length <= 48) {
+      company = candidate;
+    }
+  }
+
+  const extractedContext = rawLooksLikeLinkedInOnly
+    ? ""
+    : lines.length > 2
+      ? lines.slice(2).join(" ")
+      : lines.join(" ");
+
+  return {
+    name,
+    company,
+    event,
+    linkedinUrl,
+    phoneNumber: phoneMatch?.[0] || "",
+    rawInput: raw,
+    whatMatters: extractedContext,
+  } satisfies Partial<ParsedPersonDraft>;
+}
+
 export function CaptureModal({
   visible,
   onClose,
@@ -111,9 +213,13 @@ export function CaptureModal({
   isSaving = false,
   initialDraft,
   lockedEvent,
+  initialMethod = "manual",
+  showQuickCapture = true,
 }: CaptureModalProps) {
   const [draft, setDraft] = useState<ParsedPersonDraft>(emptyDraft);
   const [isFollowUpManuallySet, setFollowUpManuallySet] = useState(false);
+  const [activeMethod, setActiveMethod] = useState<QuickCaptureMethod>(initialMethod);
+  const [pasteInput, setPasteInput] = useState("");
 
   useEffect(() => {
     if (!visible) {
@@ -136,7 +242,9 @@ export function CaptureModal({
       rawInput: initialDraft?.rawInput || "",
     });
     setFollowUpManuallySet(Boolean(initialDraft?.nextFollowUpAt || initialDraft?.followUpPreset));
-  }, [initialDraft, lockedEvent, visible]);
+    setActiveMethod(initialMethod);
+    setPasteInput(initialDraft?.rawInput || "");
+  }, [initialDraft, initialMethod, lockedEvent, visible]);
 
   useEffect(() => {
     if (!visible || isFollowUpManuallySet) {
@@ -160,6 +268,39 @@ export function CaptureModal({
       ...current,
       [field]: value,
     }));
+  }
+
+  function handleMethodPress(method: QuickCaptureMethod) {
+    setActiveMethod(method);
+
+    if (method === "voice") {
+      Alert.alert("Voice capture soon", "We'll add the recorder next. For now, use paste or fill the form manually.");
+      return;
+    }
+
+    if (method === "scan") {
+      Alert.alert("Scan soon", "QR and badge scanning will live here next. For now, paste a LinkedIn URL or fill manually.");
+    }
+  }
+
+  function handlePasteParse() {
+    const parsed = parsePastedInput(pasteInput, lockedEvent);
+    if (!parsed) {
+      Alert.alert("Nothing to parse", "Paste a LinkedIn URL, email signature, or copied contact text first.");
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      name: parsed.name || current.name,
+      company: parsed.company || current.company,
+      event: lockedEvent?.name || parsed.event || current.event,
+      linkedinUrl: parsed.linkedinUrl || current.linkedinUrl,
+      phoneNumber: parsed.phoneNumber || current.phoneNumber,
+      whatMatters: parsed.whatMatters ? parsed.whatMatters : current.whatMatters,
+      rawInput: pasteInput,
+    }));
+    setActiveMethod("manual");
   }
 
   function handleEventCategoryChange(value: EventCategory) {
@@ -223,7 +364,7 @@ export function CaptureModal({
       nextStep: cleanValue(draft.nextStep),
       nextFollowUpAt: cleanValue(draft.nextFollowUpAt),
       followUpPreset: draft.followUpPreset,
-      rawInput: sentencePreview,
+      rawInput: cleanValue(draft.rawInput) || sentencePreview,
     });
   }
 
@@ -242,7 +383,7 @@ export function CaptureModal({
                 <Typography variant="caption">Capture</Typography>
                 <Typography variant="h1">{title}</Typography>
                 <Typography variant="body" style={styles.helperText}>
-                  Keep this quick: who they are, why they matter, and the next move.
+                  Capture quickly now, tidy the details second.
                 </Typography>
               </View>
               <Pressable onPress={onClose} hitSlop={12} style={styles.closePill}>
@@ -261,6 +402,86 @@ export function CaptureModal({
               </Card>
             ) : null}
 
+            {showQuickCapture ? (
+              <Card style={styles.sectionCard}>
+                <View style={styles.sectionIntro}>
+                  <Typography variant="caption">Quick capture</Typography>
+                  <Typography variant="body" style={styles.helperText}>
+                    Choose the fastest way to get this person into Pulse.
+                  </Typography>
+                </View>
+
+                <View style={styles.chipRow}>
+                  <Button
+                    label="Paste"
+                    onPress={() => handleMethodPress("paste")}
+                    variant={activeMethod === "paste" ? "primary" : "ghost"}
+                    fullWidth={false}
+                    size="compact"
+                  />
+                  <Button
+                    label="Voice"
+                    onPress={() => handleMethodPress("voice")}
+                    variant={activeMethod === "voice" ? "primary" : "ghost"}
+                    fullWidth={false}
+                    size="compact"
+                  />
+                  <Button
+                    label="Scan"
+                    onPress={() => handleMethodPress("scan")}
+                    variant={activeMethod === "scan" ? "primary" : "ghost"}
+                    fullWidth={false}
+                    size="compact"
+                  />
+                  <Button
+                    label="Manual"
+                    onPress={() => handleMethodPress("manual")}
+                    variant={activeMethod === "manual" ? "primary" : "ghost"}
+                    fullWidth={false}
+                    size="compact"
+                  />
+                </View>
+
+                {activeMethod === "paste" ? (
+                  <View style={styles.capturePanel}>
+                    <Typography variant="caption">Paste LinkedIn or copied contact text</Typography>
+                    <TextInput
+                      placeholder="Paste a LinkedIn URL, email signature, or copied attendee text"
+                      placeholderTextColor={colors.textTertiary}
+                      style={[styles.fieldInput, styles.textAreaInput]}
+                      value={pasteInput}
+                      onChangeText={setPasteInput}
+                      multiline
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <Typography variant="body" style={styles.helperText}>
+                      We will pull through anything obvious now, then you can review and clean it up below.
+                    </Typography>
+                    <Button label="Parse pasted text" onPress={handlePasteParse} />
+                  </View>
+                ) : null}
+
+                {activeMethod === "voice" ? (
+                  <View style={styles.placeholderPanel}>
+                    <Typography variant="h2">Voice capture placeholder</Typography>
+                    <Typography variant="body" style={styles.helperText}>
+                      Next up: tap record, transcribe the noisy event note, then review the extracted fields here.
+                    </Typography>
+                  </View>
+                ) : null}
+
+                {activeMethod === "scan" ? (
+                  <View style={styles.placeholderPanel}>
+                    <Typography variant="h2">Scan placeholder</Typography>
+                    <Typography variant="body" style={styles.helperText}>
+                      Next up: scan a QR code or badge, then review the imported contact data in this same form.
+                    </Typography>
+                  </View>
+                ) : null}
+              </Card>
+            ) : null}
+
             <Card style={styles.sectionCard}>
               <View style={styles.sectionIntro}>
                 <Typography variant="caption">Basics</Typography>
@@ -272,7 +493,7 @@ export function CaptureModal({
               <View style={styles.fieldBlock}>
                 <Typography variant="caption">Name</Typography>
                 <TextInput
-                  autoFocus
+                  autoFocus={activeMethod !== "paste"}
                   placeholder="Sarah"
                   placeholderTextColor={colors.textTertiary}
                   style={styles.fieldInput}
@@ -414,13 +635,12 @@ export function CaptureModal({
                 <Typography variant="caption">Event type</Typography>
                 <View style={styles.chipRow}>
                   {EVENT_CATEGORY_OPTIONS.filter(
-					(option): option is { label: string; value: EventCategory } => option.value !== "all"
-				 ).map((option) => (
-					<Button
-					  key={option.value}
-					  label={option.label}
-					  onPress={() => handleEventCategoryChange(option.value)}
-
+                    (option): option is { label: string; value: EventCategory } => option.value !== "all"
+                  ).map((option) => (
+                    <Button
+                      key={option.value}
+                      label={option.label}
+                      onPress={() => handleEventCategoryChange(option.value)}
                       variant={draft.eventCategory === option.value ? "primary" : "ghost"}
                       fullWidth={false}
                       size="compact"
@@ -557,6 +777,17 @@ const styles = StyleSheet.create({
   lockedEventCard: {
     backgroundColor: colors.surfaceMuted,
     gap: 6,
+  },
+  capturePanel: {
+    gap: 12,
+  },
+  placeholderPanel: {
+    gap: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    padding: 14,
   },
   fieldBlock: {
     gap: 8,
