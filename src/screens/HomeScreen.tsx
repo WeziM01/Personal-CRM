@@ -4,6 +4,7 @@ import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "re
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
+import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
 import {
@@ -12,11 +13,13 @@ import {
   createInteraction,
   createPerson,
   ensureSessionUserId,
+  formatCategoryLabel,
   getOrCreateEvent,
+  isContactStale,
   listEventInsights,
   listPeopleInsights,
 } from "../lib/crm";
-import { colors, layout } from "../theme/tokens";
+import { colors, layout, radius } from "../theme/tokens";
 import { PersonStatusMode } from "./PersonProfileScreen";
 
 type HomeScreenProps = {
@@ -24,13 +27,16 @@ type HomeScreenProps = {
   onOpenPeopleFilter?: (status: PersonStatusMode) => void;
 };
 
+type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
+
 export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
-  const [, setEvents] = useState<Awaited<ReturnType<typeof listEventInsights>>>([]);
+  const [events, setEvents] = useState<Awaited<ReturnType<typeof listEventInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const dueTodayPeople = useMemo(
@@ -41,12 +47,42 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     () => people.filter((person) => person.followUpState === "overdue").slice(0, 4),
     [people]
   );
-  const recentlyContactedPeople = useMemo(
-    () => people.filter((person) => (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD).slice(0, 4),
+  const followUpPeople = useMemo(
+    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).slice(0, 4),
     [people]
   );
   const waitingOnYouCount = dueTodayPeople.length + overduePeople.length;
+  const contactedTodayPeople = useMemo(
+    () => people.filter((person) => (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD),
+    [people]
+  );
+  const nudgeCount = useMemo(
+    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).length,
+    [people]
+  );
+  const signalPeople = useMemo(() => {
+    if (activeSignal === "tracked") {
+      return people;
+    }
 
+    if (activeSignal === "contactedToday") {
+      return contactedTodayPeople;
+    }
+
+    if (activeSignal === "needNudge") {
+      return people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority));
+    }
+
+    return recentPeople;
+  }, [activeSignal, contactedTodayPeople, people, recentPeople]);
+  const signalHeading =
+    activeSignal === "tracked"
+      ? "People tracked"
+      : activeSignal === "contactedToday"
+        ? "Contacted today"
+        : activeSignal === "needNudge"
+          ? "People who need a nudge"
+          : "Recently connected";
   const currentEventSummary = useMemo(() => {
     if (!currentEvent) {
       return null;
@@ -58,6 +94,18 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
       outstanding: linkedPeople.filter((person) => person.followUpState === "dueToday" || person.followUpState === "overdue").length,
     };
   }, [currentEvent, people]);
+
+  const eventPulse = useMemo(() => {
+    const counts = new Map<string, number>();
+    events.forEach((event) => {
+      counts.set(event.category, (counts.get(event.category) || 0) + 1);
+    });
+
+    return Array.from(counts.entries())
+      .map(([category, count]) => ({ category, count }))
+      .sort((left, right) => right.count - left.count)
+      .slice(0, 3);
+  }, [events]);
 
   async function loadData() {
     try {
@@ -144,154 +192,217 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     }
   }
 
-  const recentSectionTitle = recentlyContactedPeople.length ? "Recently contacted" : "Recently added";
-  const recentSectionCopy = recentlyContactedPeople.length
-    ? "Your latest follow-ups and warm contacts."
-    : "Newest contacts added to your Blackbook.";
-  const recentSectionPeople = recentlyContactedPeople.length ? recentlyContactedPeople : recentPeople;
+  function renderPersonCard(person: (typeof people)[number], variant: "default" | "muted" = "default") {
+    return (
+      <Card key={person.id} style={[styles.connectionCard, variant === "muted" ? styles.mutedCard : null]}>
+        <View style={styles.connectionHeader}>
+          <View style={styles.connectionMain}>
+            <Typography variant="h2">{person.name}</Typography>
+            <Typography variant="caption">
+              {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
+            </Typography>
+          </View>
+          <View style={styles.statusPill}>
+            <Typography variant="caption" style={styles.statusPillText}>{person.statusLabel}</Typography>
+          </View>
+        </View>
+        <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
+          {person.nextStep || person.whatMatters || person.lastInteractionNote}
+        </Typography>
+        <Typography variant="caption">{person.bannerLabel}</Typography>
+      </Card>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <View style={styles.headerRow}>
-          <Typography variant="h1">Blackbook</Typography>
-        </View>
-
-        {currentEvent ? (
-          <View style={styles.liveEventRow}>
-            <Pressable style={styles.liveEventPill}>
-              <Typography variant="body" style={styles.liveEventText}>🟢 Live: {currentEvent.name}</Typography>
-            </Pressable>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.headerRow}>
+            <View style={styles.headerCopy}>
+              <Typography variant="caption">Today</Typography>
+              <Typography variant="h1">Blackbook</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Track warm contacts, spot follow-ups that are slipping, and keep event momentum alive.
+              </Typography>
+            </View>
           </View>
-        ) : null}
 
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          {currentEvent ? (
+            <Card style={styles.currentEventCard}>
+              <View style={styles.currentEventTopRow}>
+                <View style={styles.liveBadge}>
+                  <Typography variant="caption" style={styles.liveBadgeText}>Live event</Typography>
+                </View>
+                <Typography variant="caption">{formatCategoryLabel(currentEvent.category)}</Typography>
+              </View>
+              <Typography variant="h2">{currentEvent.name}</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                {currentEventSummary
+                  ? `${currentEventSummary.total} people added · ${currentEventSummary.outstanding} still need follow-up.`
+                  : "Any person saved now will be attached to this event."}
+              </Typography>
+            </Card>
+          ) : null}
+
           {errorMessage ? (
             <Card>
               <Typography variant="body">{errorMessage}</Typography>
             </Card>
           ) : null}
 
+          <Card style={styles.heroCard}>
+            <View style={styles.heroTopRow}>
+              <View style={styles.heroCopy}>
+                <Typography variant="caption" style={styles.heroCaption}>Pulse</Typography>
+                <Typography variant="h2" style={styles.heroHeading}>What needs your attention now</Typography>
+              </View>
+              {waitingOnYouCount ? (
+                <View style={styles.heroBadge}>
+                  <Typography variant="caption" style={styles.heroBadgeText}>{waitingOnYouCount} waiting</Typography>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={styles.signalGrid}>
+              <Pressable
+                style={[styles.signalCell, activeSignal === "tracked" ? styles.signalCellActive : null]}
+                onPress={() => {
+                  setActiveSignal("tracked");
+                  onOpenPeopleFilter?.("all");
+                }}
+              >
+                <Typography variant="h2" style={styles.heroMetric}>{people.length}</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>People tracked</Typography>
+              </Pressable>
+              <Pressable
+                style={[styles.signalCell, activeSignal === "contactedToday" ? styles.signalCellActive : null]}
+                onPress={() => {
+                  setActiveSignal("contactedToday");
+                  onOpenPeopleFilter?.("today");
+                }}
+              >
+                <Typography variant="h2" style={styles.heroMetric}>{contactedTodayPeople.length}</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>Contacted today</Typography>
+              </Pressable>
+              <Pressable
+                style={[styles.signalCell, activeSignal === "needNudge" ? styles.signalCellActive : null]}
+                onPress={() => {
+                  setActiveSignal("needNudge");
+                  onOpenPeopleFilter?.("stale");
+                }}
+              >
+                <Typography variant="h2" style={styles.heroMetric}>{nudgeCount}</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>Need a nudge</Typography>
+              </Pressable>
+            </View>
+          </Card>
+
           {waitingOnYouCount ? (
             <Card style={styles.bannerCard}>
               <Typography variant="h2">{waitingOnYouCount} people are waiting on you</Typography>
               <Typography variant="body" style={styles.sectionMeta}>
-                Due today and overdue follow-ups show up here first.
+                Due today and overdue follow-ups are surfaced first so you can move quickly.
               </Typography>
             </Card>
           ) : null}
 
-          {currentEventSummary && currentEvent ? (
+          {dueTodayPeople.length ? (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Typography variant="caption">From current event</Typography>
+                <Typography variant="caption">Due today</Typography>
                 <Typography variant="body" style={styles.sectionMeta}>
-                  {currentEvent.name} · {currentEventSummary.total} people added · {currentEventSummary.outstanding} still need follow-up
+                  Follow-ups that should happen before the day gets away from you.
                 </Typography>
               </View>
+              {dueTodayPeople.map((person) => renderPersonCard(person, "muted"))}
+            </View>
+          ) : null}
+
+          {overduePeople.length ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Typography variant="caption">Overdue</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  These follow-ups slipped past the original plan.
+                </Typography>
+              </View>
+              {overduePeople.map((person) => renderPersonCard(person, "muted"))}
+            </View>
+          ) : null}
+
+          {activeSignal !== "all" ? (
+            <View style={styles.sectionHeaderRow}>
+              <Typography variant="caption">{signalHeading}</Typography>
+              <Button
+                label="Clear"
+                onPress={() => setActiveSignal("all")}
+                variant="ghost"
+                fullWidth={false}
+                size="compact"
+              />
+            </View>
+          ) : null}
+
+          {activeSignal !== "all" ? (
+            <View style={styles.section}>
+              {signalPeople.map((person) => renderPersonCard(person))}
+              {!isLoading && signalPeople.length === 0 ? (
+                <Typography variant="body">No contacts in this segment yet.</Typography>
+              ) : null}
             </View>
           ) : null}
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Typography variant="caption">Due today</Typography>
+              <Typography variant="caption">Recently connected</Typography>
               <Typography variant="body" style={styles.sectionMeta}>
-                Follow-ups scheduled for today.
+                Last touch, follow-up, and event memory in one glance.
               </Typography>
             </View>
-            {dueTodayPeople.length ? (
-              dueTodayPeople.map((person) => (
-                <Card key={`due-${person.id}`} style={styles.followCard}>
-                  <View style={styles.connectionHeader}>
-                    <View style={styles.connectionMain}>
-                      <Typography variant="h2">{person.name}</Typography>
-                      <Typography variant="caption">
-                        {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
-                      </Typography>
-                    </View>
-                    <Typography variant="caption">{person.nextFollowUpLabel}</Typography>
-                  </View>
-                  <Typography variant="body" style={styles.cardBody}>
-                    {person.nextStep || person.whatMatters}
-                  </Typography>
-                </Card>
-              ))
-            ) : (
-              <Card>
-                <Typography variant="body">Nothing due today.</Typography>
-              </Card>
-            )}
+
+            {recentPeople.map((person) => renderPersonCard(person))}
+            {!isLoading && recentPeople.length === 0 ? (
+              <Typography variant="body">No people tracked yet.</Typography>
+            ) : null}
           </View>
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Typography variant="caption">Overdue</Typography>
+              <Typography variant="caption">Needs follow-up</Typography>
               <Typography variant="body" style={styles.sectionMeta}>
-                Follow-ups that slipped past their planned date.
+                Contacts drifting beyond two weeks.
               </Typography>
             </View>
-            {overduePeople.length ? (
-              overduePeople.map((person) => (
-                <Card key={`overdue-${person.id}`} style={styles.followCard}>
-                  <View style={styles.connectionHeader}>
-                    <View style={styles.connectionMain}>
-                      <Typography variant="h2">{person.name}</Typography>
-                      <Typography variant="caption">
-                        {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
-                      </Typography>
-                    </View>
-                    <Typography variant="caption">{person.nextFollowUpLabel}</Typography>
-                  </View>
-                  <Typography variant="body" style={styles.cardBody}>
-                    {person.nextStep || person.whatMatters}
-                  </Typography>
-                </Card>
-              ))
-            ) : (
-              <Card>
-                <Typography variant="body">No overdue follow-ups.</Typography>
-              </Card>
-            )}
+            {followUpPeople.map((person) => renderPersonCard(person, "muted"))}
+            {!isLoading && followUpPeople.length === 0 ? (
+              <Typography variant="body">Everyone is still warm.</Typography>
+            ) : null}
           </View>
 
           <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <View style={styles.sectionHeaderCopy}>
-                <Typography variant="caption">{recentSectionTitle}</Typography>
-                <Typography variant="body" style={styles.sectionMeta}>
-                  {recentSectionCopy}
-                </Typography>
-              </View>
-              {onOpenPeopleFilter ? (
-                <Pressable onPress={() => onOpenPeopleFilter(recentlyContactedPeople.length ? "today" : "all")}>
-                  <Typography variant="caption" style={styles.linkLabel}>Open people</Typography>
-                </Pressable>
+            <View style={styles.sectionHeader}>
+              <Typography variant="caption">Event pulse</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Dominant room types across your recent activity.
+              </Typography>
+            </View>
+            <View style={styles.pulseRow}>
+              {eventPulse.map((item) => (
+                <Card key={item.category} style={styles.pulseCard}>
+                  <Typography variant="h2">{item.count}</Typography>
+                  <Typography variant="caption">{formatCategoryLabel(item.category as never)}</Typography>
+                </Card>
+              ))}
+              {!isLoading && eventPulse.length === 0 ? (
+                <Card style={styles.pulseCard}>
+                  <Typography variant="body">No event categories yet.</Typography>
+                </Card>
               ) : null}
             </View>
-
-            {recentSectionPeople.length ? (
-              recentSectionPeople.map((person) => (
-                <Card key={`recent-${person.id}`} style={styles.connectionCard}>
-                  <View style={styles.connectionHeader}>
-                    <View style={styles.connectionMain}>
-                      <Typography variant="h2">{person.name}</Typography>
-                      <Typography variant="caption">
-                        {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
-                      </Typography>
-                    </View>
-                    <Typography variant="caption">{person.statusLabel}</Typography>
-                  </View>
-                  <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
-                    {person.lastInteractionNote}
-                  </Typography>
-                  <Typography variant="caption">{person.bannerLabel}</Typography>
-                </Card>
-              ))
-            ) : !isLoading ? (
-              <Card>
-                <Typography variant="body">No contacts tracked yet.</Typography>
-              </Card>
-            ) : null}
           </View>
         </ScrollView>
 
@@ -320,74 +431,141 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
-    paddingTop: layout.stackGap,
+    paddingTop: layout.sectionGap,
     paddingBottom: 120,
-    gap: 18,
+    gap: layout.sectionGap,
   },
   headerRow: {
+    gap: 10,
+  },
+  headerCopy: {
+    gap: 8,
+  },
+  currentEventCard: {
+    backgroundColor: colors.surface,
+    gap: 10,
+  },
+  currentEventTopRow: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 8,
-  },
-  liveEventRow: {
-    flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    gap: 12,
   },
-  liveEventPill: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: 16,
-    paddingVertical: 6,
-    paddingHorizontal: 16,
+  liveBadge: {
     alignSelf: "flex-start",
-    marginBottom: 4,
+    borderRadius: radius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: colors.successSoft,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  liveEventText: {
-    color: "#1ecb4f",
+  liveBadgeText: {
+    color: "#17843A",
+  },
+  heroCard: {
+    backgroundColor: colors.primaryAction,
+    borderColor: colors.primaryAction,
+    gap: 18,
+  },
+  heroTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  heroCopy: {
+    flex: 1,
+    gap: 6,
+  },
+  heroHeading: {
+    color: colors.background,
+  },
+  heroBadge: {
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  heroBadgeText: {
+    color: colors.background,
   },
   bannerCard: {
-    backgroundColor: colors.surfaceMuted,
+    gap: 10,
+  },
+  signalGrid: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  signalCell: {
+    flex: 1,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 18,
+    padding: 14,
+    gap: 6,
+  },
+  signalCellActive: {
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
+  },
+  heroMetric: {
+    color: colors.background,
+  },
+  heroCaption: {
+    color: "rgba(246,243,238,0.76)",
   },
   section: {
-    gap: 10,
+    gap: 12,
   },
   sectionHeader: {
     gap: 4,
   },
   sectionHeaderRow: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
+    alignItems: "center",
     gap: 12,
-  },
-  sectionHeaderCopy: {
-    flex: 1,
-    gap: 4,
   },
   sectionMeta: {
     color: colors.textSecondary,
   },
-  linkLabel: {
-    color: colors.primaryAction,
-  },
-  followCard: {
-    gap: 10,
-  },
   connectionCard: {
     gap: 10,
   },
+  mutedCard: {
+    backgroundColor: colors.surfaceMuted,
+  },
   connectionHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "flex-start",
+    justifyContent: "space-between",
     gap: 12,
   },
   connectionMain: {
     flex: 1,
-    gap: 4,
+    gap: 6,
+  },
+  statusPill: {
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  statusPillText: {
+    color: colors.textSecondary,
   },
   cardBody: {
-    color: colors.textPrimary,
+    color: colors.textSecondary,
+  },
+  pulseRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  pulseCard: {
+    flex: 1,
+    gap: 8,
   },
 });

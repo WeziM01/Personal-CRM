@@ -6,7 +6,6 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
-  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -113,8 +112,6 @@ export function CaptureModal({
   initialDraft,
   lockedEvent,
 }: CaptureModalProps) {
-  const { width } = useWindowDimensions();
-  const isCompactLayout = width < 720;
   const [draft, setDraft] = useState<ParsedPersonDraft>(emptyDraft);
   const [isFollowUpManuallySet, setFollowUpManuallySet] = useState(false);
 
@@ -172,6 +169,13 @@ export function CaptureModal({
     }));
   }
 
+  function handlePriorityChange(value: PersonPriority) {
+    setDraft((current) => ({
+      ...current,
+      priority: value,
+    }));
+  }
+
   function handleFollowUpPresetSelect(preset: FollowUpPreset) {
     setFollowUpManuallySet(true);
     setDraft((current) => ({
@@ -226,52 +230,59 @@ export function CaptureModal({
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <SafeAreaView style={styles.safeArea}>
-        <ScrollView
-          style={styles.container}
-          contentContainerStyle={styles.content}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.headerRow}>
-            <Typography variant="h1">{title}</Typography>
-            <Pressable onPress={onClose} hitSlop={12}>
-              <Typography variant="body" style={styles.closeText}>
-                Close
-              </Typography>
-            </Pressable>
-          </View>
+        <View style={styles.shell}>
+          <ScrollView
+            style={styles.container}
+            contentContainerStyle={styles.content}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.headerRow}>
+              <View style={styles.headerCopy}>
+                <Typography variant="caption">Capture</Typography>
+                <Typography variant="h1">{title}</Typography>
+                <Typography variant="body" style={styles.helperText}>
+                  Keep this quick: who they are, why they matter, and the next move.
+                </Typography>
+              </View>
+              <Pressable onPress={onClose} hitSlop={12} style={styles.closePill}>
+                <Typography variant="caption" style={styles.closeText}>
+                  Close
+                </Typography>
+              </Pressable>
+            </View>
 
-          <View style={styles.copyWrap}>
-            <Typography variant="caption">Fill in the blanks</Typography>
-            <Typography variant="body" style={styles.helperText}>
-              Capture who they are, what matters, what should happen next, and when you want to follow up.
-            </Typography>
-          </View>
-
-          <Card style={styles.sentenceCard}>
             {lockedEvent ? (
               <Card style={styles.lockedEventCard}>
                 <Typography variant="caption">Current event active</Typography>
                 <Typography variant="body" style={styles.previewText}>
-                  Every save in this flow will be tagged to {lockedEvent.name} · {formatCategoryLabel(lockedEvent.category)}.
+                  This person will be tagged to {lockedEvent.name} · {formatCategoryLabel(lockedEvent.category)}.
                 </Typography>
               </Card>
             ) : null}
 
-            {isCompactLayout ? (
-              <View style={styles.mobileFormStack}>
-                <View style={styles.fieldBlock}>
-                  <Typography variant="caption">Name</Typography>
-                  <TextInput
-                    autoFocus
-                    placeholder="Sarah"
-                    placeholderTextColor={colors.textTertiary}
-                    style={styles.fieldInput}
-                    value={draft.name}
-                    onChangeText={(value) => updateField("name", value)}
-                  />
-                </View>
-                <View style={styles.fieldBlock}>
+            <Card style={styles.sectionCard}>
+              <View style={styles.sectionIntro}>
+                <Typography variant="caption">Basics</Typography>
+                <Typography variant="body" style={styles.helperText}>
+                  Save the minimum context you need to recognize them later.
+                </Typography>
+              </View>
+
+              <View style={styles.fieldBlock}>
+                <Typography variant="caption">Name</Typography>
+                <TextInput
+                  autoFocus
+                  placeholder="Sarah"
+                  placeholderTextColor={colors.textTertiary}
+                  style={styles.fieldInput}
+                  value={draft.name}
+                  onChangeText={(value) => updateField("name", value)}
+                />
+              </View>
+
+              <View style={styles.twoColumnRow}>
+                <View style={styles.metaInputBlock}>
                   <Typography variant="caption">Company</Typography>
                   <TextInput
                     placeholder="Stripe"
@@ -281,7 +292,7 @@ export function CaptureModal({
                     onChangeText={(value) => updateField("company", value)}
                   />
                 </View>
-                <View style={styles.fieldBlock}>
+                <View style={styles.metaInputBlock}>
                   <Typography variant="caption">Event</Typography>
                   <TextInput
                     placeholder="React Native EU"
@@ -293,197 +304,201 @@ export function CaptureModal({
                   />
                 </View>
               </View>
-            ) : (
-              <View style={styles.sentenceWrap}>
-                <Typography variant="body">I met</Typography>
-                <TextInput
-                  autoFocus
-                  placeholder="Sarah"
-                  placeholderTextColor={colors.textTertiary}
-                  style={[styles.inlineInput, styles.shortInput]}
-                  value={draft.name}
-                  onChangeText={(value) => updateField("name", value)}
-                />
-                <Typography variant="body">from</Typography>
-                <TextInput
-                  placeholder="Stripe"
-                  placeholderTextColor={colors.textTertiary}
-                  style={[styles.inlineInput, styles.shortInput]}
-                  value={draft.company}
-                  onChangeText={(value) => updateField("company", value)}
-                />
-                <Typography variant="body">at</Typography>
-                <TextInput
-                  placeholder="React Native EU"
-                  placeholderTextColor={colors.textTertiary}
-                  style={[styles.inlineInput, styles.longInput]}
-                  value={draft.event}
-                  onChangeText={(value) => updateField("event", value)}
-                  editable={!lockedEvent}
-                />
-                <Typography variant="body">.</Typography>
-              </View>
-            )}
 
-            <View style={styles.tagSection}>
-              <Typography variant="caption">Quick tags</Typography>
-              <Typography variant="body" style={styles.helperText}>
-                Tap the tags that best fit this contact. They can be filtered later in People.
-              </Typography>
-              <View style={styles.chipRow}>
-                {PERSON_TAG_SUGGESTIONS.map((tag) => (
+              <View style={styles.chipSection}>
+                <Typography variant="caption">Priority</Typography>
+                <View style={styles.chipRow}>
+                  {(["low", "medium", "high"] as PersonPriority[]).map((priority) => (
+                    <Button
+                      key={priority}
+                      label={priority.charAt(0).toUpperCase() + priority.slice(1)}
+                      onPress={() => handlePriorityChange(priority)}
+                      variant={draft.priority === priority ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.chipSection}>
+                <Typography variant="caption">Quick tags</Typography>
+                <View style={styles.chipRow}>
+                  {PERSON_TAG_SUGGESTIONS.map((tag) => (
+                    <Button
+                      key={tag}
+                      label={tag}
+                      onPress={() => toggleTag(tag)}
+                      variant={draft.tags.includes(tag) ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  ))}
+                </View>
+                {draft.tags.length ? (
+                  <Typography variant="caption" style={styles.tagSummary}>
+                    Selected: {draft.tags.join(", ")}
+                  </Typography>
+                ) : null}
+              </View>
+            </Card>
+
+            <Card style={styles.sectionCard}>
+              <View style={styles.sectionIntro}>
+                <Typography variant="caption">Context</Typography>
+                <Typography variant="body" style={styles.helperText}>
+                  This is the memory layer that makes the contact useful later.
+                </Typography>
+              </View>
+
+              <View style={styles.fieldBlock}>
+                <Typography variant="caption">What matters / Context</Typography>
+                <TextInput
+                  placeholder="What clicked here?"
+                  placeholderTextColor={colors.textTertiary}
+                  style={[styles.fieldInput, styles.textAreaInput]}
+                  value={draft.whatMatters}
+                  onChangeText={(value) => updateField("whatMatters", value)}
+                  multiline
+                />
+              </View>
+
+              <View style={styles.fieldBlock}>
+                <Typography variant="caption">What should happen next</Typography>
+                <TextInput
+                  placeholder="Send deck, make intro, check in next week..."
+                  placeholderTextColor={colors.textTertiary}
+                  style={[styles.fieldInput, styles.textAreaInput]}
+                  value={draft.nextStep}
+                  onChangeText={(value) => updateField("nextStep", value)}
+                  multiline
+                />
+              </View>
+
+              <View style={styles.twoColumnRow}>
+                <View style={styles.metaInputBlock}>
+                  <Typography variant="caption">LinkedIn</Typography>
+                  <TextInput
+                    placeholder="linkedin.com/in/sarah"
+                    placeholderTextColor={colors.textTertiary}
+                    style={styles.fieldInput}
+                    value={draft.linkedinUrl}
+                    onChangeText={(value) => updateField("linkedinUrl", value)}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+                <View style={styles.metaInputBlock}>
+                  <Typography variant="caption">WhatsApp</Typography>
+                  <TextInput
+                    placeholder="+44 7700 900123"
+                    placeholderTextColor={colors.textTertiary}
+                    style={styles.fieldInput}
+                    value={draft.phoneNumber}
+                    onChangeText={(value) => updateField("phoneNumber", value)}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+              </View>
+            </Card>
+
+            <Card style={styles.sectionCard}>
+              <View style={styles.sectionIntro}>
+                <Typography variant="caption">Follow-up</Typography>
+                <Typography variant="body" style={styles.helperText}>
+                  Suggested from the event type, but easy to override.
+                </Typography>
+              </View>
+
+              <View style={styles.chipSection}>
+                <Typography variant="caption">Event type</Typography>
+                <View style={styles.chipRow}>
+                  {EVENT_CATEGORY_OPTIONS.filter(
+					(option): option is { label: string; value: EventCategory } => option.value !== "all"
+				 ).map((option) => (
+					<Button
+					  key={option.value}
+					  label={option.label}
+					  onPress={() => handleEventCategoryChange(option.value)}
+
+                      variant={draft.eventCategory === option.value ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                      disabled={Boolean(lockedEvent)}
+                    />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.chipSection}>
+                <Typography variant="caption">Follow up when?</Typography>
+                <Typography variant="body" style={styles.helperText}>
+                  Suggested based on event type: {suggestedPresetLabel}
+                </Typography>
+                <View style={styles.chipRow}>
                   <Button
-                    key={tag}
-                    label={tag}
-                    onPress={() => toggleTag(tag)}
-                    variant={draft.tags.includes(tag) ? "primary" : "ghost"}
+                    label="Tomorrow"
+                    onPress={() => handleFollowUpPresetSelect("tomorrow")}
+                    variant={draft.followUpPreset === "tomorrow" ? "primary" : "ghost"}
                     fullWidth={false}
                     size="compact"
                   />
-                ))}
-              </View>
-              {draft.tags.length ? (
-                <Typography variant="caption" style={styles.tagSummary}>
-                  Selected: {draft.tags.join(", ")}
-                </Typography>
-              ) : null}
-            </View>
-
-            <View style={styles.metaInputsRow}>
-              <View style={styles.metaInputBlock}>
-                <Typography variant="caption">LinkedIn</Typography>
-                <TextInput
-                  placeholder="linkedin.com/in/sarah"
-                  placeholderTextColor={colors.textTertiary}
-                  style={styles.metaInput}
-                  value={draft.linkedinUrl}
-                  onChangeText={(value) => updateField("linkedinUrl", value)}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-              <View style={styles.metaInputBlock}>
-                <Typography variant="caption">WhatsApp</Typography>
-                <TextInput
-                  placeholder="+44 7700 900123"
-                  placeholderTextColor={colors.textTertiary}
-                  style={styles.metaInput}
-                  value={draft.phoneNumber}
-                  onChangeText={(value) => updateField("phoneNumber", value)}
-                  keyboardType="phone-pad"
-                />
-              </View>
-            </View>
-
-            <View style={styles.fieldBlock}>
-              <Typography variant="caption">What matters / Context</Typography>
-              <TextInput
-                placeholder="What clicked here?"
-                placeholderTextColor={colors.textTertiary}
-                style={[styles.fieldInput, styles.textAreaInput]}
-                value={draft.whatMatters}
-                onChangeText={(value) => updateField("whatMatters", value)}
-                multiline
-              />
-            </View>
-
-            <View style={styles.fieldBlock}>
-              <Typography variant="caption">What should happen next</Typography>
-              <TextInput
-                placeholder="Send deck, make intro, check in next week..."
-                placeholderTextColor={colors.textTertiary}
-                style={[styles.fieldInput, styles.textAreaInput]}
-                value={draft.nextStep}
-                onChangeText={(value) => updateField("nextStep", value)}
-                multiline
-              />
-            </View>
-
-            <View style={styles.categorySection}>
-              <Typography variant="caption">Event type</Typography>
-              <View style={styles.chipRow}>
-				{EVENT_CATEGORY_OPTIONS
-				.filter((option): option is { label: string; value: EventCategory } => option.value !== "all")
-				.map((option) => (
                   <Button
-                    key={option.value}
-                    label={option.label}
-                    onPress={() => handleEventCategoryChange(option.value)}
-                    variant={draft.eventCategory === option.value ? "primary" : "ghost"}
+                    label="In 3 days"
+                    onPress={() => handleFollowUpPresetSelect("in3days")}
+                    variant={draft.followUpPreset === "in3days" ? "primary" : "ghost"}
                     fullWidth={false}
                     size="compact"
-                    disabled={Boolean(lockedEvent)}
                   />
-                ))}
+                  <Button
+                    label="Next week"
+                    onPress={() => handleFollowUpPresetSelect("nextWeek")}
+                    variant={draft.followUpPreset === "nextWeek" ? "primary" : "ghost"}
+                    fullWidth={false}
+                    size="compact"
+                  />
+                  <Button
+                    label="Custom"
+                    onPress={handleCustomFollowUp}
+                    variant={draft.followUpPreset === "custom" ? "primary" : "ghost"}
+                    fullWidth={false}
+                    size="compact"
+                  />
+                </View>
+                {draft.nextFollowUpAt ? (
+                  <Typography variant="caption" style={styles.tagSummary}>
+                    Follow-up date: {formatFollowUpDate(draft.nextFollowUpAt)}
+                  </Typography>
+                ) : null}
+                {draft.followUpPreset === "custom" ? (
+                  <TextInput
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={colors.textTertiary}
+                    style={styles.fieldInput}
+                    value={draft.nextFollowUpAt}
+                    onChangeText={(value) => updateField("nextFollowUpAt", value)}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                ) : null}
               </View>
-            </View>
+            </Card>
 
-            <View style={styles.followUpSection}>
-              <Typography variant="caption">Follow up when?</Typography>
-              <Typography variant="body" style={styles.helperText}>
-                Suggested based on event type: {suggestedPresetLabel}
+            <Card style={styles.sectionCard}>
+              <Typography variant="caption">Preview</Typography>
+              <Typography variant="body" style={styles.previewText}>
+                {sentencePreview}
               </Typography>
-              <View style={styles.chipRow}>
-                <Button
-                  label="Tomorrow"
-                  onPress={() => handleFollowUpPresetSelect("tomorrow")}
-                  variant={draft.followUpPreset === "tomorrow" ? "primary" : "ghost"}
-                  fullWidth={false}
-                  size="compact"
-                />
-                <Button
-                  label="In 3 days"
-                  onPress={() => handleFollowUpPresetSelect("in3days")}
-                  variant={draft.followUpPreset === "in3days" ? "primary" : "ghost"}
-                  fullWidth={false}
-                  size="compact"
-                />
-                <Button
-                  label="Next week"
-                  onPress={() => handleFollowUpPresetSelect("nextWeek")}
-                  variant={draft.followUpPreset === "nextWeek" ? "primary" : "ghost"}
-                  fullWidth={false}
-                  size="compact"
-                />
-                <Button
-                  label="Custom"
-                  onPress={handleCustomFollowUp}
-                  variant={draft.followUpPreset === "custom" ? "primary" : "ghost"}
-                  fullWidth={false}
-                  size="compact"
-                />
-              </View>
-              {draft.nextFollowUpAt ? (
-                <Typography variant="caption" style={styles.tagSummary}>
-                  Follow-up date: {formatFollowUpDate(draft.nextFollowUpAt)}
-                </Typography>
-              ) : null}
-              {draft.followUpPreset === "custom" ? (
-                <TextInput
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor={colors.textTertiary}
-                  style={styles.metaInput}
-                  value={draft.nextFollowUpAt}
-                  onChangeText={(value) => updateField("nextFollowUpAt", value)}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              ) : null}
+            </Card>
+          </ScrollView>
+
+          <View style={styles.footerWrap}>
+            <View style={styles.footerButtons}>
+              <Button label={saveLabel} onPress={handleSave} loading={isSaving} disabled={!canSave} />
+              <Button label="Cancel" onPress={onClose} variant="ghost" />
             </View>
-          </Card>
-
-          <Card>
-            <Typography variant="caption">Preview</Typography>
-            <Typography variant="body" style={styles.previewText}>
-              {sentencePreview}
-            </Typography>
-          </Card>
-
-          <View style={styles.footerButtons}>
-            <Button label={saveLabel} onPress={handleSave} loading={isSaving} disabled={!canSave} />
-            <Button label="Cancel" onPress={onClose} variant="ghost" />
           </View>
-        </ScrollView>
+        </View>
       </SafeAreaView>
     </Modal>
   );
@@ -494,38 +509,73 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  shell: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.background,
   },
   content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
-    paddingTop: layout.stackGap,
-    paddingBottom: layout.stackGap * 2,
-    gap: 18,
+    paddingTop: layout.sectionGap,
+    paddingBottom: layout.stickyBottomInset + 48,
+    gap: layout.sectionGap,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    flexWrap: "wrap",
     gap: 12,
   },
-  copyWrap: {
+  headerCopy: {
     flex: 1,
+    gap: 8,
+  },
+  closePill: {
+    alignSelf: "flex-start",
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  closeText: {
+    color: colors.textSecondary,
+  },
+  helperText: {
+    color: colors.textSecondary,
+  },
+  sectionCard: {
+    gap: 16,
+  },
+  sectionIntro: {
     gap: 6,
   },
-  mobileFormStack: {
-    gap: 12,
+  lockedEventCard: {
+    backgroundColor: colors.surfaceMuted,
+    gap: 6,
   },
   fieldBlock: {
     gap: 8,
   },
+  twoColumnRow: {
+    flexDirection: "row",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+  metaInputBlock: {
+    flex: 1,
+    minWidth: 180,
+    gap: 8,
+  },
   fieldInput: {
-    minHeight: 48,
+    minHeight: layout.minTouchTarget,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: radius.button,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
@@ -534,80 +584,10 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   textAreaInput: {
-    minHeight: 88,
+    minHeight: 96,
     textAlignVertical: "top",
   },
-  closeText: {
-    color: colors.textSecondary,
-    fontWeight: "600",
-  },
-  helperText: {
-    color: colors.textSecondary,
-  },
-  sentenceCard: {
-    gap: 18,
-  },
-  lockedEventCard: {
-    backgroundColor: colors.surfaceMuted,
-    padding: 14,
-  },
-  sentenceWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: 10,
-  },
-  inlineInput: {
-    minHeight: 46,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: radius.button,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    color: colors.textPrimary,
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  shortInput: {
-    minWidth: 110,
-    maxWidth: 150,
-  },
-  longInput: {
-    minWidth: 180,
-    maxWidth: 260,
-  },
-  metaInputsRow: {
-    flexDirection: "row",
-    gap: 10,
-    flexWrap: "wrap",
-  },
-  tagSection: {
-    gap: 10,
-  },
-  tagSummary: {
-    color: colors.textSecondary,
-  },
-  metaInputBlock: {
-    flex: 1,
-    minWidth: 180,
-    gap: 8,
-  },
-  metaInput: {
-    minHeight: 46,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: radius.button,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    color: colors.textPrimary,
-    fontSize: 15,
-  },
-  categorySection: {
-    gap: 10,
-  },
-  followUpSection: {
+  chipSection: {
     gap: 10,
   },
   chipRow: {
@@ -615,11 +595,25 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
-  footerButtons: {
-    gap: 12,
+  tagSummary: {
+    color: colors.textSecondary,
   },
   previewText: {
-    marginTop: 10,
     color: colors.textSecondary,
+  },
+  footerWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: layout.screenPaddingHorizontal,
+    paddingTop: 12,
+    paddingBottom: 18,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  footerButtons: {
+    gap: 10,
   },
 });
