@@ -3,6 +3,7 @@
     "name": "Blackbook Pulse",
     "slug": "personal-crm-mvp",
     "version": "1.0.0",
+    "scheme": "blackbookpulse",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

@@ -5,7 +5,7 @@ import { Alert, Linking, Modal, SafeAreaView, Share, StyleSheet, View, useWindow
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
 import { formatCategoryLabel } from "./src/lib/crm";
-import { getCurrentUsername, signInAsGuest, signOutCurrentUser } from "./src/lib/auth";
+import { ensureProfileForUser, finalizeGuestUpgrade, getCurrentUsername, signInAsGuest, signOutCurrentUser } from "./src/lib/auth";
 import { supabaseConfigMessage } from "./src/lib/supabase";
 import { Button } from "./src/components/ui/Button";
 import { AuthScreen } from "./src/screens/AuthScreen";
@@ -23,8 +23,9 @@ export default function App() {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 880;
   const isVeryCompactLayout = width < 520;
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authError, clearAuthError } = useAuth();
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
+  const [isPreparingAccount, setPreparingAccount] = useState(false);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
   const [isAccountMenuOpen, setAccountMenuOpen] = useState(false);
   const [isNavMenuOpen, setNavMenuOpen] = useState(false);
@@ -50,7 +51,7 @@ export default function App() {
               {supabaseConfigMessage}
             </Typography>
             <Typography variant="body" style={styles.configText}>
-              Add the same EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY values from your local .env to Vercel Project Settings, then redeploy.
+              Add EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_ANON_KEY, and EXPO_PUBLIC_AUTH_REDIRECT_URL to your local .env and Vercel Project Settings, then redeploy.
             </Typography>
           </View>
         </View>
@@ -64,12 +65,19 @@ export default function App() {
     async function syncUsername() {
       if (!user || user.is_anonymous) {
         if (isMounted) {
+          setPreparingAccount(false);
           setCurrentUsername(null);
         }
         return;
       }
 
+      if (isMounted) {
+        setPreparingAccount(true);
+      }
+
       try {
+        await ensureProfileForUser(user);
+        await finalizeGuestUpgrade(user);
         const username = await getCurrentUsername(user.id);
         if (isMounted) {
           setCurrentUsername(username);
@@ -78,10 +86,14 @@ export default function App() {
         if (isMounted) {
           setCurrentUsername(null);
         }
+      } finally {
+        if (isMounted) {
+          setPreparingAccount(false);
+        }
       }
     }
 
-    syncUsername();
+    void syncUsername();
 
     return () => {
       isMounted = false;
@@ -99,7 +111,7 @@ export default function App() {
     previousWasGuest.current = isGuest;
   }, [user]);
 
-  if (isLoading) {
+  if (isLoading || isPreparingAccount) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingWrap}>
@@ -110,7 +122,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <AuthScreen />;
+    return <AuthScreen authError={authError} onAuthenticated={() => clearAuthError()} />;
   }
 
   async function handleReportBug() {

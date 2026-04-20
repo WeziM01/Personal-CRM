@@ -4,14 +4,13 @@ import { SafeAreaView, StyleSheet, TextInput, View } from "react-native";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
-import { isUsernameAvailable, signInAsGuest, signInWithUsername, signUpWithUsername } from "../lib/auth";
+import { sendMagicLink, signInAsGuest, signInWithGoogle } from "../lib/auth";
 import { colors, layout } from "../theme/tokens";
-
-type AuthMode = "login" | "signup";
 
 type AuthScreenProps = {
   canUseGuest?: boolean;
   guestUserId?: string | null;
+  authError?: string | null;
   onAuthenticated?: (message: string) => void;
   onCancel?: () => void;
 };
@@ -21,20 +20,26 @@ type BannerState = {
   tone: "success" | "error";
 } | null;
 
-export function AuthScreen({ canUseGuest = true, guestUserId = null, onAuthenticated, onCancel }: AuthScreenProps) {
-  const [mode, setMode] = useState<AuthMode>(guestUserId ? "signup" : "login");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [importGuestData, setImportGuestData] = useState(Boolean(guestUserId));
-  const [banner, setBanner] = useState<BannerState>(null);
-  const [isBusy, setBusy] = useState(false);
+export function AuthScreen({
+  canUseGuest = true,
+  guestUserId = null,
+  authError = null,
+  onAuthenticated,
+  onCancel,
+}: AuthScreenProps) {
+  const [email, setEmail] = useState("");
+  const [banner, setBanner] = useState<BannerState>(authError ? { text: authError, tone: "error" } : null);
+  const [isGoogleBusy, setGoogleBusy] = useState(false);
+  const [isMagicLinkBusy, setMagicLinkBusy] = useState(false);
+  const [isGuestBusy, setGuestBusy] = useState(false);
 
-  const normalizedUsername = useMemo(() => username.trim().toLowerCase(), [username]);
-  const canSubmit = normalizedUsername.length >= 3 && password.length >= 6;
+  const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
+  const canSendMagicLink = normalizedEmail.includes("@");
+  const isBusy = isGoogleBusy || isMagicLinkBusy || isGuestBusy;
 
   async function handleGuest() {
     try {
-      setBusy(true);
+      setGuestBusy(true);
       setBanner(null);
       await signInAsGuest();
       const message = "Guest mode active.";
@@ -43,50 +48,33 @@ export function AuthScreen({ canUseGuest = true, guestUserId = null, onAuthentic
     } catch (error) {
       setBanner({ text: error instanceof Error ? error.message : "Failed to start guest mode.", tone: "error" });
     } finally {
-      setBusy(false);
+      setGuestBusy(false);
     }
   }
 
-  async function handleLogin() {
+  async function handleGoogle() {
     try {
-      setBusy(true);
+      setGoogleBusy(true);
       setBanner(null);
-      await signInWithUsername(normalizedUsername, password);
-      const message = "Logged in successfully.";
-      setBanner({ text: message, tone: "success" });
-      onAuthenticated?.(message);
+      await signInWithGoogle(guestUserId);
     } catch (error) {
-      setBanner({ text: error instanceof Error ? error.message : "Login failed.", tone: "error" });
-    } finally {
-      setBusy(false);
+      setBanner({ text: error instanceof Error ? error.message : "Google sign-in failed.", tone: "error" });
+      setGoogleBusy(false);
     }
   }
 
-  async function handleSignup() {
+  async function handleMagicLink() {
     try {
-      setBusy(true);
+      setMagicLinkBusy(true);
       setBanner(null);
-
-      const usernameAvailable = await isUsernameAvailable(normalizedUsername);
-      if (!usernameAvailable) {
-        setBanner({ text: "Can't use that username because it's already used.", tone: "error" });
-        return;
-      }
-
-      await signUpWithUsername({
-        username: normalizedUsername,
-        password,
-        guestUserId,
-        importGuestData,
-      });
-
-      const message = "Signed up successfully.";
+      await sendMagicLink(normalizedEmail, guestUserId);
+      const message = `Magic link sent to ${normalizedEmail}. Check your inbox to continue.`;
       setBanner({ text: message, tone: "success" });
       onAuthenticated?.(message);
     } catch (error) {
-      setBanner({ text: error instanceof Error ? error.message : "Sign up failed.", tone: "error" });
+      setBanner({ text: error instanceof Error ? error.message : "Could not send magic link.", tone: "error" });
     } finally {
-      setBusy(false);
+      setMagicLinkBusy(false);
     }
   }
 
@@ -97,78 +85,45 @@ export function AuthScreen({ canUseGuest = true, guestUserId = null, onAuthentic
           <Typography variant="caption">Welcome</Typography>
           <Typography variant="h1">Blackbook Pulse</Typography>
           <Typography variant="body" style={styles.subtitle}>
-            Use guest mode for quick capture, then create a real account when you want persistent login.
+            Use guest mode for quick capture, then upgrade with Google or a passwordless email link when you want a permanent account.
           </Typography>
         </View>
 
         <Card style={styles.modeCard}>
-          <View style={styles.modeRow}>
-            <Button
-              label="Login"
-              onPress={() => setMode("login")}
-              variant={mode === "login" ? "primary" : "ghost"}
-              fullWidth={false}
-              size="compact"
-            />
-            <Button
-              label="Sign up"
-              onPress={() => setMode("signup")}
-              variant={mode === "signup" ? "primary" : "ghost"}
-              fullWidth={false}
-              size="compact"
-            />
-          </View>
-
           <View style={styles.formBlock}>
-            <Typography variant="caption">Username</Typography>
+            <Typography variant="caption">Email for magic link</Typography>
             <TextInput
               autoCapitalize="none"
               autoCorrect={false}
-              value={username}
-              onChangeText={setUsername}
-              placeholder="wezzi"
+              autoComplete="email"
+              keyboardType="email-address"
+              value={email}
+              onChangeText={setEmail}
+              placeholder="wez@example.com"
               placeholderTextColor={colors.textTertiary}
               style={styles.input}
             />
-
-            <Typography variant="caption">Password</Typography>
-            <TextInput
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              value={password}
-              onChangeText={setPassword}
-              placeholder="At least 6 characters"
-              placeholderTextColor={colors.textTertiary}
-              style={styles.input}
-            />
+            <Typography variant="body" style={styles.helperText}>
+              We will email you a secure sign-in link. No password needed.
+            </Typography>
           </View>
 
-          {mode === "signup" && guestUserId ? (
-            <View style={styles.importRow}>
-              <Typography variant="body" style={styles.subtitle}>
-                Import guest data into this account
-              </Typography>
-              <Button
-                label={importGuestData ? "Yes" : "No"}
-                onPress={() => setImportGuestData((current) => !current)}
-                variant={importGuestData ? "primary" : "ghost"}
-                fullWidth={false}
-                size="compact"
-              />
-            </View>
-          ) : null}
-
+          <Button label="Continue with Google" onPress={handleGoogle} loading={isGoogleBusy} disabled={isBusy && !isGoogleBusy} />
           <Button
-            label={mode === "signup" ? "Create account" : "Login"}
-            onPress={mode === "signup" ? handleSignup : handleLogin}
-            disabled={!canSubmit || isBusy}
-            loading={isBusy}
+            label="Email me a magic link"
+            onPress={handleMagicLink}
+            disabled={!canSendMagicLink || (isBusy && !isMagicLinkBusy)}
+            loading={isMagicLinkBusy}
+            variant="ghost"
           />
 
-          {canUseGuest ? (
-            <Button label="Use as guest" onPress={handleGuest} variant="ghost" disabled={isBusy} />
+          {guestUserId ? (
+            <Typography variant="body" style={styles.helperText}>
+              Your guest data will be imported automatically after you finish signing in.
+            </Typography>
           ) : null}
+
+          {canUseGuest ? <Button label="Use as guest" onPress={handleGuest} variant="ghost" disabled={isBusy && !isGuestBusy} loading={isGuestBusy} /> : null}
 
           {onCancel ? <Button label="Cancel" onPress={onCancel} variant="ghost" disabled={isBusy} /> : null}
 
@@ -205,12 +160,11 @@ const styles = StyleSheet.create({
   subtitle: {
     color: colors.textSecondary,
   },
+  helperText: {
+    color: colors.textSecondary,
+  },
   modeCard: {
     gap: 14,
-  },
-  modeRow: {
-    flexDirection: "row",
-    gap: 8,
   },
   formBlock: {
     gap: 10,
@@ -224,12 +178,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     color: colors.textPrimary,
     fontSize: 16,
-  },
-  importRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 12,
   },
   banner: {
     paddingHorizontal: 12,

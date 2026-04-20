@@ -1,39 +1,65 @@
 import { useEffect, useState } from "react";
-
 import { Session } from "@supabase/supabase-js";
 
+import { completeAuthRedirect } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 
 export function useAuth() {
-	const [session, setSession] = useState<Session | null>(null);
-	const [isLoading, setLoading] = useState(true);
+  const [session, setSession] = useState<Session | null>(null);
+  const [isLoading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-	useEffect(() => {
-		if (!supabase) {
-			setLoading(false);
-			return;
-		}
+  useEffect(() => {
+    let isMounted = true;
 
-		supabase.auth.getSession().then(({ data }) => {
-			setSession(data.session);
-			setLoading(false);
-		});
+    async function bootstrap() {
+      if (!supabase) {
+        if (isMounted) {
+          setLoading(false);
+        }
+        return;
+      }
 
-		const {
-			data: { subscription },
-		} = supabase.auth.onAuthStateChange((_event, nextSession) => {
-			setSession(nextSession);
-		});
+      const redirectResult = await completeAuthRedirect();
+      if (isMounted && redirectResult.error) {
+        setAuthError(redirectResult.error);
+      }
 
-		return () => {
-			subscription.unsubscribe();
-		};
-	}, []);
+      const { data } = await supabase.auth.getSession();
+      if (isMounted) {
+        setSession(data.session);
+        setLoading(false);
+      }
+    }
 
-	return {
-		session,
-		user: session?.user ?? null,
-		isLoading,
-	};
+    void bootstrap();
+
+    if (!supabase) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (isMounted) {
+        setSession(nextSession);
+        setAuthError(null);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  return {
+    session,
+    user: session?.user ?? null,
+    isLoading,
+    authError,
+    clearAuthError: () => setAuthError(null),
+  };
 }
-
