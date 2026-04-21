@@ -42,6 +42,12 @@
         {
           "microphonePermission": "Allow Pulse to access your microphone."
         }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow Blackbook Pulse to open your calendar when you add follow-up reminders."
+        }
       ]
     ]
   }

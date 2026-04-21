@@ -26,6 +26,7 @@ import {
   isContactStale,
 } from "../lib/crm";
 import { colors, layout } from "../theme/tokens";
+import { openFollowUpInCalendar } from "../lib/calendar";
 
 type SortMode = "recent" | "stale" | "name" | "frequency";
 type CaptureMode = "createInteraction" | "createPerson" | "edit";
@@ -454,6 +455,36 @@ export function PersonProfileScreen({
     }
   }
 
+
+  function getMomentLabel(count: number) {
+    return `${count} logged ${count === 1 ? "moment" : "moments"}`;
+  }
+
+  async function handleAddToCalendar(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    if (!person.nextFollowUpAt) {
+      Alert.alert("No follow-up date", `Set a follow-up date for ${person.name} first.`);
+      return;
+    }
+
+    try {
+      await openFollowUpInCalendar({
+        name: person.name,
+        company: person.company,
+        nextFollowUpAt: person.nextFollowUpAt,
+        whatMatters: person.whatMatters,
+        nextStep: person.nextStep,
+        linkedinUrl: person.linkedinUrl,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not open the calendar handoff.";
+      Alert.alert("Calendar handoff failed", message);
+    }
+  }
+
   function buildMessageForPerson(person = selectedPerson) {
     if (!person) {
       return "";
@@ -708,9 +739,23 @@ export function PersonProfileScreen({
             <Card style={styles.featureCard}>
               <Typography variant="caption">Selected contact</Typography>
               <Typography variant="h1">{selectedPerson.name}</Typography>
-              <Typography variant="body" style={styles.featureBody}>
-                {selectedPerson.bannerLabel} · {selectedPerson.interactionCount} logged moments · {selectedPerson.lastEventName || "No event yet"}
-              </Typography>
+              <View style={styles.featureMetaRow}>
+                <Typography variant="body" style={styles.featureBody}>
+                  {selectedPerson.bannerLabel}
+                </Typography>
+                {selectedPerson.nextFollowUpAt ? (
+                  <>
+                    <Typography variant="body" style={styles.metaDivider}>·</Typography>
+                    <Pressable onPress={() => void handleAddToCalendar(selectedPerson)} style={styles.inlineMetaAction}>
+                      <Typography variant="body" style={styles.inlineMetaActionText}>📅 Add to Calendar</Typography>
+                    </Pressable>
+                  </>
+                ) : null}
+                <Typography variant="body" style={styles.metaDivider}>·</Typography>
+                <Typography variant="body" style={styles.featureBody}>
+                  {getMomentLabel(selectedPerson.interactionCount)}
+                </Typography>
+              </View>
               {selectedPerson.company ? (
                 <Typography variant="caption">{selectedPerson.company}</Typography>
               ) : null}
@@ -725,7 +770,7 @@ export function PersonProfileScreen({
               ) : null}
               {searchQuery ? <Typography variant="caption">Search: {searchQuery}</Typography> : null}
 
-              <View style={styles.actionRow}>
+              <View style={styles.primaryActionRow}>
                 <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(selectedPerson)} fullWidth={false} size="compact" />
                 {selectedPerson.linkedinUrl ? (
                   <Button
@@ -736,16 +781,20 @@ export function PersonProfileScreen({
                     size="compact"
                   />
                 ) : null}
+              </View>
+
+              <View style={styles.secondaryActionRow}>
                 <Button
-                  label="Edit"
-                  onPress={() => setPersonActionMenu(selectedPerson)}
+                  label="✓ Reached out"
+                  onPress={() => handleMarkContactedToday(selectedPerson)}
                   variant="ghost"
                   fullWidth={false}
                   size="compact"
                 />
                 <Button
-                  label="Reached out"
-                  onPress={() => handleMarkContactedToday(selectedPerson)}
+                  label="Edit"
+                  onPress={() => setPersonActionMenu(selectedPerson)}
+                  variant="ghost"
                   fullWidth={false}
                   size="compact"
                 />
@@ -808,14 +857,24 @@ export function PersonProfileScreen({
                         </Typography>
                         <View style={styles.metaRow}>
                           <Typography variant="caption">{person.bannerLabel}</Typography>
+                          {person.nextFollowUpAt ? (
+                            <Pressable onPress={() => void handleAddToCalendar(person)} style={styles.inlineMetaAction}>
+                              <Typography variant="caption" style={styles.inlineMetaActionCaption}>📅 Add to Calendar</Typography>
+                            </Pressable>
+                          ) : null}
                           {isContactStale(person.daysSinceLastContact, person.priority) ? <Typography variant="caption">Need a nudge</Typography> : null}
-                          <Typography variant="caption">{person.interactionCount} notes</Typography>
+                          <Typography variant="caption">{getMomentLabel(person.interactionCount)}</Typography>
                         </View>
                         {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                         <View style={styles.compactExpandedActions}>
                           <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(person)} fullWidth={false} size="compact" />
+                          {person.linkedinUrl ? (
+                            <Button label="LinkedIn" onPress={() => handleOpenExternal(person.linkedinUrl)} variant="ghost" fullWidth={false} size="compact" />
+                          ) : null}
+                        </View>
+                        <View style={styles.secondaryActionRow}>
+                          <Button label="✓ Reached out" onPress={() => handleMarkContactedToday(person)} variant="ghost" fullWidth={false} size="compact" />
                           <Button label="Edit" onPress={() => setPersonActionMenu(person)} variant="ghost" fullWidth={false} size="compact" />
-                          <Button label="Mark today" onPress={() => handleMarkContactedToday(person)} variant="ghost" fullWidth={false} size="compact" />
                         </View>
                       </View>
                     ) : null}
@@ -1112,6 +1171,25 @@ const styles = StyleSheet.create({
   featureBody: {
     color: colors.textSecondary,
   },
+  featureMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+  },
+  metaDivider: {
+    color: colors.textTertiary,
+  },
+  inlineMetaAction: {
+    borderRadius: 999,
+  },
+  inlineMetaActionText: {
+    color: colors.primaryAction,
+    fontWeight: "600",
+  },
+  inlineMetaActionCaption: {
+    color: colors.primaryAction,
+  },
   confirmOverlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 120,
@@ -1213,7 +1291,12 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
-  actionRow: {
+  primaryActionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  secondaryActionRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
