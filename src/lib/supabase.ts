@@ -8,9 +8,7 @@ import { createClient, processLock, SupabaseClient } from "@supabase/supabase-js
 import { Database } from "../types/database";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabasePublishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-const supabasePublicKey = supabasePublishableKey || supabaseAnonKey;
 const configuredAuthRedirectUrl = process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL;
 
 function isValidHttpUrl(value: string) {
@@ -41,8 +39,8 @@ const supabaseConfigError = !supabaseUrl
   ? "Missing EXPO_PUBLIC_SUPABASE_URL."
   : !isValidHttpUrl(supabaseUrl)
     ? "Invalid EXPO_PUBLIC_SUPABASE_URL. It must be a valid HTTP or HTTPS URL."
-    : !supabasePublicKey
-      ? "Missing EXPO_PUBLIC_SUPABASE_ANON_KEY or EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY."
+    : !supabaseAnonKey
+      ? "Missing EXPO_PUBLIC_SUPABASE_ANON_KEY."
       : configuredAuthRedirectUrl && !isValidHttpUrl(configuredAuthRedirectUrl)
         ? "Invalid EXPO_PUBLIC_AUTH_REDIRECT_URL. It must be a valid HTTP or HTTPS URL."
         : null;
@@ -50,7 +48,7 @@ const supabaseConfigError = !supabaseUrl
 export const isSupabaseConfigured = supabaseConfigError === null;
 
 export const supabase: SupabaseClient<Database> | null = isSupabaseConfigured
-  ? createClient<Database>(supabaseUrl as string, supabasePublicKey as string, {
+  ? createClient<Database>(supabaseUrl as string, supabaseAnonKey as string, {
       auth: {
         ...(Platform.OS !== "web" ? { storage: AsyncStorage } : {}),
         flowType: "pkce",
@@ -73,7 +71,7 @@ if (supabase && Platform.OS !== "web") {
 }
 
 export const missingSupabaseEnvMessage =
-  "Missing Supabase env vars. Set EXPO_PUBLIC_SUPABASE_URL plus EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_ANON_KEY.";
+  "Missing Supabase env vars. Set EXPO_PUBLIC_SUPABASE_URL plus EXPO_PUBLIC_SUPABASE_ANON_KEY.";
 
 export const supabaseConfigMessage = supabaseConfigError
   ? `${missingSupabaseEnvMessage} ${supabaseConfigError}`

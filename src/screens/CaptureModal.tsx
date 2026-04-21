@@ -323,11 +323,6 @@ export function CaptureModal({
       setVoiceError(null);
       setIsTranscribing(true);
 
-      setDraft((current) => ({
-        ...current,
-        whatMatters: "VOICE_STOP_HANDLER_REACHED",
-      }));
-
       await recorder.stop();
 
       const uri = recorder.uri;
@@ -341,9 +336,6 @@ export function CaptureModal({
         mimeType: "audio/m4a",
       });
 
-      console.log("VOICE RESULT", result);
-      Alert.alert("Voice result", JSON.stringify(result));
-
       setDraft((current) => ({
         ...current,
         ...result.draft,
@@ -355,19 +347,9 @@ export function CaptureModal({
 
       setActiveMethod("manual");
     } catch (error) {
-      console.error("VOICE ERROR", error);
-      Alert.alert(
-        "Voice error",
-        error instanceof Error ? error.message : "Voice transcription failed."
-      );
       setVoiceError(
         error instanceof Error ? error.message : "Voice transcription failed."
       );
-      setDraft((current) => ({
-        ...current,
-        whatMatters:
-          error instanceof Error ? `VOICE_ERROR: ${error.message}` : "VOICE_ERROR",
-      }));
     } finally {
       setIsTranscribing(false);
     }
@@ -631,22 +613,6 @@ export function CaptureModal({
                     onChangeText={(value) => updateField("event", value)}
                     editable={!lockedEvent}
                   />
-                </View>
-              </View>
-
-              <View style={styles.chipSection}>
-                <Typography variant="caption">Priority</Typography>
-                <View style={styles.chipRow}>
-                  {(["low", "medium", "high"] as PersonPriority[]).map((priority) => (
-                    <Button
-                      key={priority}
-                      label={priority.charAt(0).toUpperCase() + priority.slice(1)}
-                      onPress={() => handlePriorityChange(priority)}
-                      variant={draft.priority === priority ? "primary" : "ghost"}
-                      fullWidth={false}
-                      size="compact"
-                    />
-                  ))}
                 </View>
               </View>
 
