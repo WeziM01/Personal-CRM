@@ -323,6 +323,11 @@ export function CaptureModal({
       setVoiceError(null);
       setIsTranscribing(true);
 
+      setDraft((current) => ({
+        ...current,
+        whatMatters: "VOICE_STOP_HANDLER_REACHED",
+      }));
+
       await recorder.stop();
 
       const uri = recorder.uri;
@@ -358,6 +363,11 @@ export function CaptureModal({
       setVoiceError(
         error instanceof Error ? error.message : "Voice transcription failed."
       );
+      setDraft((current) => ({
+        ...current,
+        whatMatters:
+          error instanceof Error ? `VOICE_ERROR: ${error.message}` : "VOICE_ERROR",
+      }));
     } finally {
       setIsTranscribing(false);
     }
