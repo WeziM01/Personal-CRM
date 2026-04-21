@@ -10,6 +10,16 @@ import {
   View,
 } from "react-native";
 
+import {
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+  RecordingPresets,
+} from "expo-audio";
+
+import { transcribeContactAudio } from "../lib/voice";
+
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
@@ -221,6 +231,12 @@ export function CaptureModal({
   const [activeMethod, setActiveMethod] = useState<QuickCaptureMethod>(initialMethod);
   const [pasteInput, setPasteInput] = useState("");
 
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
+
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!visible) {
       return;
@@ -273,13 +289,77 @@ export function CaptureModal({
   function handleMethodPress(method: QuickCaptureMethod) {
     setActiveMethod(method);
 
-    if (method === "voice") {
-      Alert.alert("Voice capture soon", "We'll add the recorder next. For now, use paste or fill the form manually.");
-      return;
-    }
-
     if (method === "scan") {
       Alert.alert("Scan soon", "QR and badge scanning will live here next. For now, paste a LinkedIn URL or fill manually.");
+    }
+  }
+
+  async function handleStartVoiceCapture() {
+    try {
+      setVoiceError(null);
+
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        setVoiceError("Microphone permission was denied.");
+        return;
+      }
+
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch (error) {
+      setVoiceError(
+        error instanceof Error ? error.message : "Could not start recording."
+      );
+    }
+  }
+
+  async function handleStopVoiceCapture() {
+    try {
+      setVoiceError(null);
+      setIsTranscribing(true);
+
+      await recorder.stop();
+
+      const uri = recorder.uri;
+      if (!uri) {
+        throw new Error("No recording file was created.");
+      }
+
+      const result = await transcribeContactAudio({
+        uri,
+        fileName: "contact-note.m4a",
+        mimeType: "audio/m4a",
+      });
+
+      console.log("VOICE RESULT", result);
+      Alert.alert("Voice result", JSON.stringify(result));
+
+      setDraft((current) => ({
+        ...current,
+        ...result.draft,
+        whatMatters:
+          result.draft.whatMatters?.trim() ||
+          result.transcript?.trim() ||
+          current.whatMatters,
+      }));
+
+      setActiveMethod("manual");
+    } catch (error) {
+      console.error("VOICE ERROR", error);
+      Alert.alert(
+        "Voice error",
+        error instanceof Error ? error.message : "Voice transcription failed."
+      );
+      setVoiceError(
+        error instanceof Error ? error.message : "Voice transcription failed."
+      );
+    } finally {
+      setIsTranscribing(false);
     }
   }
 
@@ -420,11 +500,29 @@ export function CaptureModal({
                     size="compact"
                   />
                   <Button
-                    label="Voice"
-                    onPress={() => handleMethodPress("voice")}
-                    variant={activeMethod === "voice" ? "primary" : "ghost"}
+                    label={
+                      isTranscribing
+                        ? "Transcribing..."
+                        : recorderState.isRecording
+                        ? "Stop recording"
+                        : "Voice"
+                    }
+                    onPress={
+                      recorderState.isRecording
+                        ? handleStopVoiceCapture
+                        : async () => {
+                            handleMethodPress("voice");
+                            await handleStartVoiceCapture();
+                          }
+                    }
+                    variant={
+                      recorderState.isRecording || activeMethod === "voice"
+                        ? "primary"
+                        : "ghost"
+                    }
                     fullWidth={false}
                     size="compact"
+                    disabled={isTranscribing}
                   />
                   <Button
                     label="Scan"
