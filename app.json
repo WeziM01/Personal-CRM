@@ -55,6 +55,13 @@
           "cameraPermission": "Allow Pulse to access your camera.",
           "barcodeScannerEnabled": true
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Pulse to access your photos to scan business cards and badges.",
+          "cameraPermission": "Allow Pulse to access your camera to scan business cards and badges."
+        }
       ]
     ]
   }

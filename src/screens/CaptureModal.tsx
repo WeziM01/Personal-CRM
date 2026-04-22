@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -18,7 +19,10 @@ import {
   RecordingPresets,
 } from "expo-audio";
 
+import * as ImagePicker from "expo-image-picker";
+
 import { QRScannerModal } from "../components/QRScannerModal";
+import { scanContactCardImage } from "../lib/cardScan";
 import { parseScannedInput } from "../lib/scan";
 import { transcribeContactAudio } from "../lib/voice";
 
@@ -250,6 +254,8 @@ export function CaptureModal({
 
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [isCardScanProcessing, setIsCardScanProcessing] = useState(false);
   const [isScanChoiceVisible, setIsScanChoiceVisible] = useState(false);
   const [isQrScannerVisible, setIsQrScannerVisible] = useState(false);
 
@@ -276,6 +282,8 @@ export function CaptureModal({
     setFollowUpManuallySet(Boolean(initialDraft?.nextFollowUpAt || initialDraft?.followUpPreset));
     setActiveMethod(initialMethod);
     setPasteInput(initialDraft?.rawInput || "");
+    setScanError(null);
+    setIsCardScanProcessing(false);
     setIsScanChoiceVisible(false);
     setIsQrScannerVisible(false);
   }, [initialDraft, initialMethod, lockedEvent, visible]);
@@ -378,12 +386,94 @@ export function CaptureModal({
     setIsQrScannerVisible(true);
   }
 
+  async function launchCardScan(source: "camera" | "library") {
+    try {
+      setScanError(null);
+      setIsCardScanProcessing(true);
+
+      if (source === "camera") {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          throw new Error("Camera permission was denied.");
+        }
+      } else {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          throw new Error("Media library permission was denied.");
+        }
+      }
+
+      const result = source === "camera"
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"] as any,
+            allowsEditing: false,
+            quality: 0.9,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"] as any,
+            allowsEditing: false,
+            quality: 0.9,
+          });
+
+      if (result.canceled || !result.assets?.length) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const scanResult = await scanContactCardImage({
+        uri: asset.uri,
+        mimeType: asset.mimeType || "image/jpeg",
+        fileName: asset.fileName || "contact-card.jpg",
+      });
+
+      setDraft((current) => ({
+        ...current,
+        name: scanResult.draft.name || current.name,
+        company: scanResult.draft.company || current.company,
+        event: lockedEvent?.name || current.event,
+        linkedinUrl: scanResult.draft.linkedinUrl || current.linkedinUrl,
+        email: scanResult.draft.email || current.email,
+        phoneNumber: scanResult.draft.phoneNumber || current.phoneNumber,
+        whatMatters: scanResult.draft.whatMatters || current.whatMatters,
+        rawInput: scanResult.rawText || current.rawInput,
+      }));
+
+      setActiveMethod("manual");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Business card scan failed.";
+      setScanError(message);
+      Alert.alert("Card scan error", message);
+    } finally {
+      setIsCardScanProcessing(false);
+    }
+  }
+
   function handleChooseScanOcr() {
     setIsScanChoiceVisible(false);
-    Alert.alert(
-      "Business card / badge scan next",
-      "OCR with ML Kit is the next step. For now, use QR if available or capture via voice/paste."
-    );
+
+    if (Platform.OS === "web") {
+      void launchCardScan("library");
+      return;
+    }
+
+    Alert.alert("Scan business card / badge", "Choose how you want to import the image.", [
+      {
+        text: "Take photo",
+        onPress: () => {
+          void launchCardScan("camera");
+        },
+      },
+      {
+        text: "Choose photo",
+        onPress: () => {
+          void launchCardScan("library");
+        },
+      },
+      {
+        text: "Cancel",
+        style: "cancel",
+      },
+    ]);
   }
 
   function handleScanResult(value: string) {
@@ -617,8 +707,13 @@ export function CaptureModal({
                   <View style={styles.placeholderPanel}>
                     <Typography variant="h2">Scan capture</Typography>
                     <Typography variant="body" style={styles.helperText}>
-                      Scan a QR code now, or use card/badge OCR next. Everything still lands back in this same review form.
+                      Scan a QR code now, or import a business card or badge photo for OCR. Everything still lands back in this same review form.
                     </Typography>
+                    {scanError ? (
+                      <Typography variant="caption" style={styles.errorText}>
+                        {scanError}
+                      </Typography>
+                    ) : null}
                   </View>
                 ) : null}
               </Card>
@@ -874,7 +969,12 @@ export function CaptureModal({
               </Typography>
               <View style={styles.sheetButtonStack}>
                 <Button label="Scan QR" onPress={handleChooseScanQr} />
-                <Button label="Scan business card / badge" onPress={handleChooseScanOcr} variant="ghost" />
+                <Button
+                  label={isCardScanProcessing ? "Scanning card..." : "Scan business card / badge"}
+                  onPress={handleChooseScanOcr}
+                  variant="ghost"
+                  loading={isCardScanProcessing}
+                />
                 <Button label="Cancel" onPress={() => setIsScanChoiceVisible(false)} variant="ghost" />
               </View>
             </View>
@@ -934,6 +1034,9 @@ const styles = StyleSheet.create({
   },
   helperText: {
     color: colors.textSecondary,
+  },
+  errorText: {
+    color: colors.destructive,
   },
   sectionCard: {
     gap: 16,
