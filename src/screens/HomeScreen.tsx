@@ -161,6 +161,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
         draft.name,
         draft.company,
         draft.linkedinUrl,
+        draft.email,
         draft.phoneNumber,
         draft.priority,
         draft.tags

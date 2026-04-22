@@ -321,6 +321,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         draft.name,
         draft.company,
         draft.linkedinUrl,
+        draft.email,
         draft.phoneNumber,
         draft.priority,
         draft.tags

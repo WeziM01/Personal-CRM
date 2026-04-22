@@ -182,6 +182,7 @@ export function PersonProfileScreen({
       tags: person.tags,
       company: person.company,
       linkedinUrl: person.linkedinUrl,
+      email: person.email,
       phoneNumber: person.phoneNumber,
       event: person.lastEventName || "",
       whatMatters: "",
@@ -219,6 +220,7 @@ export function PersonProfileScreen({
       tags: [],
       company: "",
       linkedinUrl: "",
+      email: "",
       phoneNumber: "",
       event: currentEvent?.name || "",
       eventCategory: currentEvent?.category || "",
@@ -253,6 +255,7 @@ export function PersonProfileScreen({
       tags: person.tags,
       company: person.company,
       linkedinUrl: person.linkedinUrl,
+      email: person.email,
       phoneNumber: person.phoneNumber,
       event: person.lastEventName || "",
       whatMatters: person.whatMatters || person.lastInteractionNote,
@@ -286,6 +289,7 @@ export function PersonProfileScreen({
           tags: draft.tags,
           company: draft.company,
           linkedinUrl: draft.linkedinUrl,
+          email: draft.email,
           phoneNumber: draft.phoneNumber,
         });
 
@@ -327,6 +331,7 @@ export function PersonProfileScreen({
             draft.name === "Unknown contact" ? "New Person" : draft.name,
             draft.company,
             draft.linkedinUrl,
+            draft.email,
             draft.phoneNumber,
             draft.priority,
             draft.tags
@@ -339,6 +344,7 @@ export function PersonProfileScreen({
           name: draft.name,
           company: draft.company,
           linkedinUrl: draft.linkedinUrl,
+          email: draft.email,
           phoneNumber: draft.phoneNumber,
           priority: draft.priority,
           tags: draft.tags,

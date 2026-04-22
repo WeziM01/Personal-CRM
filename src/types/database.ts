@@ -70,6 +70,7 @@ export type Database = {
 			persons: {
 				Row: {
 						company: string | null;
+						email: string | null;
 					created_at: string;
 					id: string;
 					is_vip: boolean;
@@ -83,6 +84,7 @@ export type Database = {
 				};
 				Insert: {
 						company?: string | null;
+						email?: string | null;
 					created_at?: string;
 					id?: string;
 					is_vip?: boolean;
@@ -96,6 +98,7 @@ export type Database = {
 				};
 				Update: {
 						company?: string | null;
+						email?: string | null;
 					created_at?: string;
 					id?: string;
 					is_vip?: boolean;

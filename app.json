@@ -48,6 +48,13 @@
         {
           "calendarPermission": "Allow Blackbook Pulse to open your calendar when you add follow-up reminders."
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Pulse to access your camera.",
+          "barcodeScannerEnabled": true
+        }
       ]
     ]
   }

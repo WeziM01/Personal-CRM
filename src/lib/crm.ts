@@ -7,6 +7,7 @@ export type PersonRow = {
   id: string;
   is_vip: boolean;
   linkedin_url: string | null;
+  email: string | null;
   name: string | null;
   phone_number: string | null;
   priority: PersonPriority;
@@ -51,6 +52,7 @@ export type PersonInsight = {
   priority: PersonPriority;
   company: string;
   linkedinUrl: string;
+  email: string;
   phoneNumber: string;
   tags: string[];
   createdAt: string;
@@ -341,6 +343,7 @@ export async function createPerson(
   name: string,
   company?: string,
   linkedinUrl?: string,
+  email?: string,
   phoneNumber?: string,
   priority: PersonPriority = "medium",
   tags: string[] = []
@@ -356,11 +359,12 @@ export async function createPerson(
       company: company?.trim() || null,
       is_vip: priority === "high",
       linkedin_url: normalizeLinkedInUrl(linkedinUrl),
+      email: normalizeEmail(email),
       phone_number: normalizePhoneNumber(phoneNumber),
       priority,
       tags: normalizedTags,
     })
-    .select("id,name,company,is_vip,linkedin_url,phone_number,priority,tags,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,priority,tags,created_at")
     .single();
 
   assertNoError(error);
@@ -391,6 +395,7 @@ export async function updatePersonDetails(input: {
   name: string;
   company?: string;
   linkedinUrl?: string;
+  email?: string;
   phoneNumber?: string;
   priority?: PersonPriority;
   tags?: string[];
@@ -406,6 +411,7 @@ export async function updatePersonDetails(input: {
       company: input.company?.trim() || null,
       is_vip: normalizedPriority === "high",
       linkedin_url: normalizeLinkedInUrl(input.linkedinUrl),
+      email: normalizeEmail(input.email),
       phone_number: normalizePhoneNumber(input.phoneNumber),
       priority: normalizedPriority,
       tags: normalizedTags,
@@ -506,7 +512,7 @@ export async function listRecentPeople(userId: string, limit = 8) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,phone_number,priority,tags,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -582,7 +588,7 @@ export async function getFirstPerson(userId: string) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,phone_number,priority,tags,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -624,6 +630,7 @@ export async function listPeopleInsights(userId: string) {
       priority,
       company: person.company || extractCompany(rawNote),
       linkedinUrl: person.linkedin_url || "",
+      email: person.email || "",
       phoneNumber: person.phone_number || "",
       tags,
       createdAt: person.created_at,
@@ -726,6 +733,15 @@ export function normalizeLinkedInUrl(value?: string | null) {
   }
 
   return `https://www.linkedin.com/in/${trimmed.replace(/^@/, "")}`;
+}
+
+export function normalizeEmail(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.toLowerCase();
 }
 
 export function normalizePhoneNumber(value?: string | null) {

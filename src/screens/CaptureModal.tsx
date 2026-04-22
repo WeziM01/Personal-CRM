@@ -18,6 +18,8 @@ import {
   RecordingPresets,
 } from "expo-audio";
 
+import { QRScannerModal } from "../components/QRScannerModal";
+import { parseScannedInput } from "../lib/scan";
 import { transcribeContactAudio } from "../lib/voice";
 
 import { Button } from "../components/ui/Button";
@@ -44,6 +46,7 @@ export type ParsedPersonDraft = {
   tags: string[];
   company: string;
   linkedinUrl: string;
+  email: string;
   phoneNumber: string;
   event: string;
   eventCategory: EventCategory | "";
@@ -60,6 +63,7 @@ const emptyDraft: ParsedPersonDraft = {
   tags: [],
   company: "",
   linkedinUrl: "",
+  email: "",
   phoneNumber: "",
   event: "",
   eventCategory: "",
@@ -150,6 +154,15 @@ function parsePastedInput(rawValue: string, lockedEvent?: LockedEventDraft | nul
   const linkedinUrl = linkedinMatch?.[0] || "";
   const rawLooksLikeLinkedInOnly = Boolean(linkedinUrl) && lines.length <= 2 && !metFromMatch && !companyLabelMatch && !eventMatch;
 
+  const emailOnly =
+    Boolean(emailMatch) &&
+    raw.trim() === (emailMatch ? emailMatch[0] : "") &&
+    !linkedinMatch &&
+    !phoneMatch &&
+    !metFromMatch &&
+    !companyLabelMatch &&
+    !eventMatch;
+
   if (metFromMatch) {
     name = cleanValue(metFromMatch[1]);
     company = cleanValue(metFromMatch[2]);
@@ -208,6 +221,7 @@ function parsePastedInput(rawValue: string, lockedEvent?: LockedEventDraft | nul
     company,
     event,
     linkedinUrl,
+    email: emailMatch?.[0] || "",
     phoneNumber: phoneMatch?.[0] || "",
     rawInput: raw,
     whatMatters: extractedContext,
@@ -236,6 +250,8 @@ export function CaptureModal({
 
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [isScanChoiceVisible, setIsScanChoiceVisible] = useState(false);
+  const [isQrScannerVisible, setIsQrScannerVisible] = useState(false);
 
   useEffect(() => {
     if (!visible) {
@@ -260,6 +276,8 @@ export function CaptureModal({
     setFollowUpManuallySet(Boolean(initialDraft?.nextFollowUpAt || initialDraft?.followUpPreset));
     setActiveMethod(initialMethod);
     setPasteInput(initialDraft?.rawInput || "");
+    setIsScanChoiceVisible(false);
+    setIsQrScannerVisible(false);
   }, [initialDraft, initialMethod, lockedEvent, visible]);
 
   useEffect(() => {
@@ -290,7 +308,7 @@ export function CaptureModal({
     setActiveMethod(method);
 
     if (method === "scan") {
-      Alert.alert("Scan soon", "QR and badge scanning will live here next. For now, paste a LinkedIn URL or fill manually.");
+      setIsScanChoiceVisible(true);
     }
   }
 
@@ -355,6 +373,38 @@ export function CaptureModal({
     }
   }
 
+  function handleChooseScanQr() {
+    setIsScanChoiceVisible(false);
+    setIsQrScannerVisible(true);
+  }
+
+  function handleChooseScanOcr() {
+    setIsScanChoiceVisible(false);
+    Alert.alert(
+      "Business card / badge scan next",
+      "OCR with ML Kit is the next step. For now, use QR if available or capture via voice/paste."
+    );
+  }
+
+  function handleScanResult(value: string) {
+    const parsed = parseScannedInput(value, lockedEvent);
+
+    setDraft((current) => ({
+      ...current,
+      name: parsed.name || current.name,
+      company: parsed.company || current.company,
+      event: lockedEvent?.name || parsed.event || current.event,
+      linkedinUrl: parsed.linkedinUrl || current.linkedinUrl,
+      email: parsed.email || current.email,
+      phoneNumber: parsed.phoneNumber || current.phoneNumber,
+      whatMatters: parsed.whatMatters ? parsed.whatMatters : current.whatMatters,
+      rawInput: value,
+    }));
+
+    setActiveMethod("manual");
+    setIsQrScannerVisible(false);
+  }
+
   function handlePasteParse() {
     const parsed = parsePastedInput(pasteInput, lockedEvent);
     if (!parsed) {
@@ -368,6 +418,7 @@ export function CaptureModal({
       company: parsed.company || current.company,
       event: lockedEvent?.name || parsed.event || current.event,
       linkedinUrl: parsed.linkedinUrl || current.linkedinUrl,
+      email: parsed.email || current.email,
       phoneNumber: parsed.phoneNumber || current.phoneNumber,
       whatMatters: parsed.whatMatters ? parsed.whatMatters : current.whatMatters,
       rawInput: pasteInput,
@@ -429,6 +480,7 @@ export function CaptureModal({
       tags: draft.tags,
       company: cleanValue(draft.company),
       linkedinUrl: cleanValue(draft.linkedinUrl),
+      email: cleanValue(draft.email),
       phoneNumber: cleanValue(draft.phoneNumber),
       event: cleanValue(draft.event) || "No event",
       eventCategory: draft.eventCategory,
@@ -563,9 +615,9 @@ export function CaptureModal({
 
                 {activeMethod === "scan" ? (
                   <View style={styles.placeholderPanel}>
-                    <Typography variant="h2">Scan placeholder</Typography>
+                    <Typography variant="h2">Scan capture</Typography>
                     <Typography variant="body" style={styles.helperText}>
-                      Next up: scan a QR code or badge, then review the imported contact data in this same form.
+                      Scan a QR code now, or use card/badge OCR next. Everything still lands back in this same review form.
                     </Typography>
                   </View>
                 ) : null}
@@ -684,6 +736,19 @@ export function CaptureModal({
                   />
                 </View>
                 <View style={styles.metaInputBlock}>
+                  <Typography variant="caption">Email</Typography>
+                  <TextInput
+                    placeholder="sarah@company.com"
+                    placeholderTextColor={colors.textTertiary}
+                    style={styles.fieldInput}
+                    value={draft.email}
+                    onChangeText={(value) => updateField("email", value)}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                  />
+                </View>
+                <View style={styles.metaInputBlock}>
                   <Typography variant="caption">WhatsApp</Typography>
                   <TextInput
                     placeholder="+44 7700 900123"
@@ -793,6 +858,34 @@ export function CaptureModal({
             </View>
           </View>
         </View>
+
+        <Modal
+          visible={isScanChoiceVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setIsScanChoiceVisible(false)}
+        >
+          <View style={styles.sheetBackdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setIsScanChoiceVisible(false)} />
+            <View style={styles.sheetCard}>
+              <Typography variant="h2">Scan</Typography>
+              <Typography variant="body" style={styles.helperText}>
+                Choose what you want to capture.
+              </Typography>
+              <View style={styles.sheetButtonStack}>
+                <Button label="Scan QR" onPress={handleChooseScanQr} />
+                <Button label="Scan business card / badge" onPress={handleChooseScanOcr} variant="ghost" />
+                <Button label="Cancel" onPress={() => setIsScanChoiceVisible(false)} variant="ghost" />
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <QRScannerModal
+          visible={isQrScannerVisible}
+          onClose={() => setIsQrScannerVisible(false)}
+          onScanned={handleScanResult}
+        />
       </SafeAreaView>
     </Modal>
   );
@@ -920,5 +1013,22 @@ const styles = StyleSheet.create({
   },
   footerButtons: {
     gap: 10,
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    justifyContent: "flex-end",
+    padding: layout.screenPaddingHorizontal,
+    paddingBottom: layout.stickyBottomInset + 24,
+  },
+  sheetCard: {
+    backgroundColor: colors.background,
+    borderRadius: 24,
+    padding: 24,
+    gap: 8,
+  },
+  sheetButtonStack: {
+    gap: 10,
+    marginTop: 12,
   },
 });
