@@ -39,6 +39,7 @@ export type Database = {
 				Row: {
 						category: string | null;
 					created_at: string;
+					event_date: string | null;
 					id: string;
 					name: string;
 					user_id: string;
@@ -46,6 +47,7 @@ export type Database = {
 				Insert: {
 						category?: string | null;
 					created_at?: string;
+					event_date?: string | null;
 					id?: string;
 					name: string;
 					user_id: string;
@@ -53,6 +55,7 @@ export type Database = {
 				Update: {
 						category?: string | null;
 					created_at?: string;
+					event_date?: string | null;
 					id?: string;
 					name?: string;
 					user_id?: string;

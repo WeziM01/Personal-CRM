@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
+import { Alert, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
@@ -18,6 +18,7 @@ import {
   isContactStale,
   listEventInsights,
   listPeopleInsights,
+  parseDateOnlyString,
 } from "../lib/crm";
 import { colors, layout, radius } from "../theme/tokens";
 import { PersonStatusMode } from "./PersonProfileScreen";
@@ -29,6 +30,31 @@ type HomeScreenProps = {
 
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
+function getDayDistanceFromToday(value: string) {
+  const parsed = parseDateOnlyString(value);
+  if (!parsed) {
+    return null;
+  }
+
+  const today = new Date();
+  const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startTarget = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
+  return Math.round((startTarget - startToday) / (1000 * 60 * 60 * 24));
+}
+
+function formatEventDateLabel(value?: string | null) {
+  const parsed = value ? parseDateOnlyString(value) : null;
+  if (!parsed) {
+    return "No date set";
+  }
+
+  return parsed.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
@@ -37,6 +63,8 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
+  const [dismissedWrapUpEventId, setDismissedWrapUpEventId] = useState<string | null>(null);
+  const [isWrapUpOpen, setWrapUpOpen] = useState(false);
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const dueTodayPeople = useMemo(
@@ -94,6 +122,47 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
       outstanding: linkedPeople.filter((person) => person.followUpState === "dueToday" || person.followUpState === "overdue").length,
     };
   }, [currentEvent, people]);
+
+  const wrapUpCandidate = useMemo(() => {
+    return events
+      .filter((event) => event.eventDate && event.id !== dismissedWrapUpEventId)
+      .filter((event) => {
+        const distance = getDayDistanceFromToday(event.eventDate as string);
+        return distance !== null && distance < 0 && distance >= -3;
+      })
+      .sort((left, right) => (right.eventDate || "").localeCompare(left.eventDate || ""))[0] || null;
+  }, [dismissedWrapUpEventId, events]);
+
+  const wrapUpStats = useMemo(() => {
+    if (!wrapUpCandidate) {
+      return null;
+    }
+
+    const linkedPeople = people.filter((person) => person.lastEventName === wrapUpCandidate.name);
+    const companyCounts = new Map<string, number>();
+
+    linkedPeople.forEach((person) => {
+      if (!person.company) {
+        return;
+      }
+
+      companyCounts.set(person.company, (companyCounts.get(person.company) || 0) + 1);
+    });
+
+    const topCompany = Array.from(companyCounts.entries())
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0] || null;
+
+    return {
+      totalConnections: linkedPeople.length,
+      topCompany,
+      highPriorityFollowUps: linkedPeople.filter(
+        (person) => person.priority === "high" && person.followUpState !== "none"
+      ).length,
+      dueSoon: linkedPeople.filter(
+        (person) => person.followUpState === "dueToday" || person.followUpState === "overdue"
+      ).length,
+    };
+  }, [people, wrapUpCandidate]);
 
   const eventPulse = useMemo(() => {
     const counts = new Map<string, number>();
@@ -255,6 +324,28 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
             </Card>
           ) : null}
 
+          {wrapUpCandidate && wrapUpStats ? (
+            <Card style={styles.wrapUpBannerCard}>
+              <View style={styles.wrapUpBannerCopy}>
+                <Typography variant="caption">Event wrap-up</Typography>
+                <Typography variant="h2">Did you wrap up {wrapUpCandidate.name}?</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  Tap in to see your summary from {formatEventDateLabel(wrapUpCandidate.eventDate)} and move the next follow-ups forward.
+                </Typography>
+              </View>
+              <View style={styles.wrapUpBannerActions}>
+                <Button label="View summary" onPress={() => setWrapUpOpen(true)} fullWidth={false} size="compact" />
+                <Button
+                  label="Dismiss"
+                  onPress={() => setDismissedWrapUpEventId(wrapUpCandidate.id)}
+                  variant="ghost"
+                  fullWidth={false}
+                  size="compact"
+                />
+              </View>
+            </Card>
+          ) : null}
+
           {errorMessage ? (
             <Card>
               <Typography variant="body">{errorMessage}</Typography>
@@ -373,7 +464,19 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
 
             {recentPeople.map((person) => renderPersonCard(person))}
             {!isLoading && recentPeople.length === 0 ? (
-              <Typography variant="body">No people tracked yet.</Typography>
+              people.length === 0 ? (
+                <Card style={styles.emptyStateCard}>
+                  <Typography variant="h2">Your network is quiet today.</Typography>
+                  <Typography variant="body" style={styles.sectionMeta}>
+                    Great connections start with a single scan or one new contact.
+                  </Typography>
+                  <View style={styles.emptyStateActions}>
+                    <Button label="Add a Connection" onPress={openCapture} fullWidth={false} size="compact" />
+                  </View>
+                </Card>
+              ) : (
+                <Typography variant="body">No people tracked yet.</Typography>
+              )
             ) : null}
           </View>
 
@@ -412,6 +515,59 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
             </View>
           </View>
         </ScrollView>
+
+        <Modal visible={isWrapUpOpen} transparent animationType="fade" onRequestClose={() => setWrapUpOpen(false)}>
+          <View style={styles.wrapUpOverlay}>
+            <Pressable style={styles.wrapUpBackdrop} onPress={() => setWrapUpOpen(false)} />
+            <View style={styles.wrapUpCardWrap}>
+              <Card style={styles.wrapUpSummaryCard}>
+                <Typography variant="caption">Wrap-up</Typography>
+                <Typography variant="h1">{wrapUpCandidate ? `You crushed it at ${wrapUpCandidate.name}! 🎉` : "Event wrap-up"}</Typography>
+                {wrapUpCandidate ? (
+                  <Typography variant="body" style={styles.sectionMeta}>
+                    {formatEventDateLabel(wrapUpCandidate.eventDate)} · {formatCategoryLabel(wrapUpCandidate.category as never)}
+                  </Typography>
+                ) : null}
+                {wrapUpStats ? (
+                  <View style={styles.wrapUpStatGrid}>
+                    <Card style={styles.wrapUpStatCard}>
+                      <Typography variant="h2">🤝 {wrapUpStats.totalConnections}</Typography>
+                      <Typography variant="caption">New connections</Typography>
+                    </Card>
+                    <Card style={styles.wrapUpStatCard}>
+                      <Typography variant="h2">🏢 {wrapUpStats.topCompany ? wrapUpStats.topCompany[1] : 0}</Typography>
+                      <Typography variant="caption">{wrapUpStats.topCompany ? `people from ${wrapUpStats.topCompany[0]}` : "top company still loading"}</Typography>
+                    </Card>
+                    <Card style={styles.wrapUpStatCard}>
+                      <Typography variant="h2">⚡ {wrapUpStats.highPriorityFollowUps}</Typography>
+                      <Typography variant="caption">High-priority follow-ups</Typography>
+                    </Card>
+                  </View>
+                ) : null}
+                <Typography variant="body" style={styles.sectionMeta}>
+                  {wrapUpStats?.dueSoon ? `${wrapUpStats.dueSoon} people already need attention. Review follow-ups while the event is still fresh.` : "Everything is captured. Review your people while the event is still fresh."}
+                </Typography>
+                <View style={styles.wrapUpModalActions}>
+                  <Button
+                    label="Draft Follow-ups"
+                    onPress={() => {
+                      setWrapUpOpen(false);
+                      setDismissedWrapUpEventId(wrapUpCandidate?.id || null);
+                      onOpenPeopleFilter?.("all");
+                    }}
+                  />
+                  <Button
+                    label="Maybe later"
+                    variant="ghost"
+                    onPress={() => {
+                      setWrapUpOpen(false);
+                    }}
+                  />
+                </View>
+              </Card>
+            </View>
+          </View>
+        </Modal>
 
         <FloatingFab label="+" onPress={openCapture} />
 
@@ -590,5 +746,55 @@ const styles = StyleSheet.create({
   pulseCard: {
     flex: 1,
     gap: 8,
+  },
+
+  wrapUpBannerCard: {
+    gap: 12,
+    backgroundColor: colors.surface,
+  },
+  wrapUpBannerCopy: {
+    gap: 6,
+  },
+  wrapUpBannerActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  emptyStateCard: {
+    gap: 10,
+  },
+  emptyStateActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  wrapUpOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 120,
+  },
+  wrapUpBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.28)",
+  },
+  wrapUpCardWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  wrapUpSummaryCard: {
+    width: "100%",
+    maxWidth: 560,
+    gap: 12,
+  },
+  wrapUpStatGrid: {
+    gap: 10,
+  },
+  wrapUpStatCard: {
+    gap: 8,
+    backgroundColor: colors.surfaceMuted,
+  },
+  wrapUpModalActions: {
+    gap: 10,
   },
 });

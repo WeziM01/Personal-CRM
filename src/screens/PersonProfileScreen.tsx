@@ -56,6 +56,7 @@ export function PersonProfileScreen({
   const [statusMode, setStatusMode] = useState<PersonStatusMode>("all");
   const [categoryMode, setCategoryMode] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
   const [selectedTag, setSelectedTag] = useState<string>("all");
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -66,6 +67,23 @@ export function PersonProfileScreen({
 
   const availableTags = useMemo(() => {
     return Array.from(new Set([...PERSON_TAG_SUGGESTIONS, ...people.flatMap((person) => person.tags)])).sort();
+  }, [people]);
+
+  const topCompanies = useMemo(() => {
+    const counts = new Map<string, number>();
+    people.forEach((person) => {
+      const company = person.company.trim();
+      if (!company) {
+        return;
+      }
+
+      counts.set(company, (counts.get(company) || 0) + 1);
+    });
+
+    return Array.from(counts.entries())
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 8)
+      .map(([company]) => company);
   }, [people]);
 
   const sortLabel =
@@ -102,11 +120,15 @@ export function PersonProfileScreen({
       (person) => selectedTag === "all" || person.tags.includes(selectedTag)
     );
 
+    const companyFiltered = tagFiltered.filter(
+      (person) => selectedCompany === "all" || person.company.toLowerCase() === selectedCompany.toLowerCase()
+    );
+
     const query = searchQuery.trim().toLowerCase();
     const searchedPeople = !query
-      ? tagFiltered
-      : tagFiltered.filter((person) =>
-          [person.name, person.company, person.lastInteractionNote, person.followUp, person.lastEventName || "", person.tags.join(" ")]
+      ? companyFiltered
+      : companyFiltered.filter((person) =>
+          [person.name, person.company, person.email, person.lastInteractionNote, person.followUp, person.lastEventName || "", person.tags.join(" ")]
             .join(" ")
             .toLowerCase()
             .includes(query)
@@ -129,7 +151,7 @@ export function PersonProfileScreen({
       const rightValue = right.lastInteractionAt || right.createdAt;
       return rightValue.localeCompare(leftValue);
     });
-  }, [categoryMode, people, searchQuery, selectedTag, sortMode, statusMode]);
+  }, [categoryMode, people, searchQuery, selectedCompany, selectedTag, sortMode, statusMode]);
 
   const selectedPerson = useMemo(() => {
     if (selectedPersonId) {
@@ -717,6 +739,33 @@ export function PersonProfileScreen({
               autoCorrect={false}
             />
 
+            {topCompanies.length ? (
+              <>
+                <Typography variant="caption" style={styles.subSectionLabel}>
+                  Companies
+                </Typography>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                  <Button
+                    label="All companies"
+                    onPress={() => setSelectedCompany("all")}
+                    variant={selectedCompany === "all" ? "primary" : "ghost"}
+                    fullWidth={false}
+                    size="compact"
+                  />
+                  {topCompanies.map((company) => (
+                    <Button
+                      key={company}
+                      label={company}
+                      onPress={() => setSelectedCompany(company)}
+                      variant={selectedCompany === company ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  ))}
+                </ScrollView>
+              </>
+            ) : null}
+
             <Typography variant="caption" style={styles.subSectionLabel}>
               Tags
             </Typography>
@@ -815,7 +864,7 @@ export function PersonProfileScreen({
           <View style={styles.timelineHeader}>
             <Typography variant="caption">All connections</Typography>
             <Typography variant="body" style={styles.timelineCount}>
-              {filteredPeople.length} people in view ({sortLabel}{selectedTag !== "all" ? ` · ${selectedTag}` : ""})
+              {filteredPeople.length} people in view ({sortLabel}{selectedCompany !== "all" ? ` · ${selectedCompany}` : ""}{selectedTag !== "all" ? ` · ${selectedTag}` : ""})
             </Typography>
           </View>
 
@@ -928,8 +977,29 @@ export function PersonProfileScreen({
                     <Button label={`Create ${searchQuery.trim()}`} onPress={openCreatePersonFromSearch} fullWidth={false} size="compact" />
                   </View>
                 </Card>
+              ) : people.length === 0 ? (
+                <Card style={styles.emptyStateCard}>
+                  <Typography variant="h2">Your network is quiet today.</Typography>
+                  <Typography variant="body" style={styles.timelineCount}>
+                    Great connections start with a single scan or a new contact.
+                  </Typography>
+                  <View style={styles.emptyStateActions}>
+                    <Button label="Add a Connection" onPress={() => openCreatePerson("")} fullWidth={false} size="compact" />
+                    <Button label="Open Quick Capture" onPress={() => openCreatePerson("")} variant="ghost" fullWidth={false} size="compact" />
+                  </View>
+                </Card>
               ) : (
-                <Typography variant="body">No contacts match this filter yet.</Typography>
+                <Card style={styles.emptyStateCard}>
+                  <Typography variant="h2">No contacts match this view.</Typography>
+                  <Typography variant="body" style={styles.timelineCount}>
+                    Try clearing your company, tag, or status filters to widen the list again.
+                  </Typography>
+                  <View style={styles.emptyStateActions}>
+                    <Button label="Clear company" onPress={() => setSelectedCompany("all")} variant="ghost" fullWidth={false} size="compact" />
+                    <Button label="Clear tags" onPress={() => setSelectedTag("all")} variant="ghost" fullWidth={false} size="compact" />
+                    <Button label="Show all" onPress={() => { setStatusMode("all"); setCategoryMode("all"); }} variant="ghost" fullWidth={false} size="compact" />
+                  </View>
+                </Card>
               )
             ) : null}
           </View>
