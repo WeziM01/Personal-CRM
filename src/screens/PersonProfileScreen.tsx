@@ -846,9 +846,7 @@ export function PersonProfileScreen({
   }
 
   function renderCommunicationButtons(person: (typeof people)[number]) {
-    const availableChannels = getAvailableChannels(person);
     const preferredChannel = getPreferredChannelForPerson(person);
-    const secondaryChannels = availableChannels.filter((channel) => channel !== preferredChannel).slice(0, 2);
 
     return (
       <View style={styles.primaryActionRow}>
@@ -858,16 +856,6 @@ export function PersonProfileScreen({
           fullWidth={false}
           size="compact"
         />
-        {secondaryChannels.map((channel) => (
-          <Button
-            key={`${person.id}-${channel}`}
-            label={formatPreferredChannelLabel(channel, person.preferredChannelOther)}
-            onPress={() => handleDraftMessage(person, channel)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-          />
-        ))}
         <Button
           label="Copy"
           onPress={() => {

@@ -25,10 +25,12 @@ import {
   deleteEvent,
   ensureSessionUserId,
   formatCategoryLabel,
+  formatEventDate,
   getOrCreateEvent,
   listAllInteractions,
   listEventInsights,
   listPeopleInsights,
+  parseDateOnlyString,
   updateEventDetails,
 } from "../lib/crm";
 import { colors, layout } from "../theme/tokens";
@@ -38,6 +40,7 @@ type SortMode = "recent" | "name" | "people" | "notes";
 type EventEditorDraft = {
   name: string;
   category: (typeof EVENT_CATEGORY_OPTIONS)[number]["value"] | "";
+  eventDate: string;
 };
 
 type EventScreenProps = {
@@ -54,7 +57,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
   const [isDeletingEvent, setDeletingEvent] = useState(false);
   const [deleteArmedEventId, setDeleteArmedEventId] = useState<string | null>(null);
   const [eventEditorMode, setEventEditorMode] = useState<"create" | "edit">("create");
-  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "" });
+  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "", eventDate: "" });
   const [captureInitialDraft, setCaptureInitialDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const [captureLockedEvent, setCaptureLockedEvent] = useState<CurrentEventValue | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
@@ -184,6 +187,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name: currentEvent?.name || "",
       category: currentEvent?.category || "",
+      eventDate: "",
     });
     setEventEditorOpen(true);
   }
@@ -193,6 +197,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name,
       category: currentEvent?.category || "",
+      eventDate: "",
     });
     setEventEditorOpen(true);
   }
@@ -203,7 +208,11 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     }
 
     setEventEditorMode("edit");
-    setEventDraft({ name: selectedEvent.name, category: selectedEvent.category });
+    setEventDraft({
+      name: selectedEvent.name,
+      category: selectedEvent.category,
+      eventDate: selectedEvent.eventDate || "",
+    });
     setEventEditorOpen(true);
   }
 
@@ -233,10 +242,16 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
       return;
     }
 
+    if (eventDraft.eventDate && !parseDateOnlyString(eventDraft.eventDate)) {
+      Alert.alert("Invalid date", "Use YYYY-MM-DD for the event date.");
+      return;
+    }
+
     try {
       setSavingEvent(true);
       const userId = await ensureSessionUserId();
       const category = eventDraft.category && eventDraft.category !== "all" ? eventDraft.category : null;
+      const eventDate = eventDraft.eventDate.trim() || null;
 
       if (eventEditorMode === "edit" && selectedEvent) {
         await updateEventDetails({
@@ -244,9 +259,10 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           eventId: selectedEvent.id,
           name,
           category,
+          eventDate,
         });
       } else {
-        const event = await getOrCreateEvent(userId, name, category);
+        const event = await getOrCreateEvent(userId, name, category, eventDate);
         setSelectedEventId(event.id);
       }
 
@@ -295,7 +311,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     try {
       setSavingEvent(true);
       const userId = await ensureSessionUserId();
-      const event = await getOrCreateEvent(userId, trimmedQuery, null);
+      const event = await getOrCreateEvent(userId, trimmedQuery, null, null);
       setSelectedEventId(event.id);
       setSearchQuery("");
       await loadEventData();
@@ -334,7 +350,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
       let linkedEventName = eventName;
 
       if (eventName && eventName !== "No event") {
-        const draftEvent = await getOrCreateEvent(userId, eventName, eventCategory);
+        const draftEvent = await getOrCreateEvent(userId, eventName, eventCategory, null);
         linkedEventId = draftEvent.id;
         linkedEventName = draftEvent.name;
       }
@@ -443,7 +459,9 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
             <Card style={styles.featureCard}>
               <Typography variant="h2">{selectedEvent.name}</Typography>
               <Typography variant="caption" style={styles.secondaryText}>
-                {formatCategoryLabel(selectedEvent.category)} · {selectedEvent.interactionCount} notes · {selectedEvent.peopleCount} people
+                {formatCategoryLabel(selectedEvent.category)}
+                {selectedEvent.eventDate ? ` · ${formatEventDate(selectedEvent.eventDate)}` : ""}
+                {` · ${selectedEvent.interactionCount} notes · ${selectedEvent.peopleCount} people`}
               </Typography>
               <Typography variant="caption">
                 Due today {selectedEventFollowUpSummary.dueToday} · Overdue {selectedEventFollowUpSummary.overdue} · Upcoming {selectedEventFollowUpSummary.upcoming}
@@ -488,7 +506,9 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                         <Typography variant="body" style={styles.secondaryText}>
                           {formatCategoryLabel(event.category as never)}
                         </Typography>
-                        <Typography variant="caption">{event.lastConnectedLabel}</Typography>
+                        <Typography variant="caption">
+                          {event.eventDate ? `${formatEventDate(event.eventDate)} · ` : ""}{event.lastConnectedLabel}
+                        </Typography>
                       </View>
                       <Typography variant="h2">{event.name}</Typography>
                       <Typography variant="caption">{event.interactionCount} notes · {event.peopleCount} people</Typography>
@@ -599,6 +619,19 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                   style={styles.searchInput}
                   value={eventDraft.name}
                   onChangeText={(value) => setEventDraft((current) => ({ ...current, name: value }))}
+                />
+
+                <Typography variant="caption" style={styles.subSectionLabel}>
+                  Event date
+                </Typography>
+                <TextInput
+                  placeholder="2026-04-28"
+                  placeholderTextColor={colors.textTertiary}
+                  style={styles.searchInput}
+                  value={eventDraft.eventDate}
+                  onChangeText={(value) => setEventDraft((current) => ({ ...current, eventDate: value }))}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
 
                 <Typography variant="caption" style={styles.subSectionLabel}>

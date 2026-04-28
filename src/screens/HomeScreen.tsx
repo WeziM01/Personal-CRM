@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
@@ -25,11 +26,19 @@ import { PersonStatusMode } from "./PersonProfileScreen";
 type HomeScreenProps = {
   currentEvent: CurrentEventValue | null;
   onOpenPeopleFilter?: (status: PersonStatusMode) => void;
+  onRequestOpenEvents?: () => void;
 };
 
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
-export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps) {
+const EVENT_ONBOARDING_KEY = "blackbook:onboarding:event-anchor-seen";
+const CAPTURE_ONBOARDING_KEY = "blackbook:onboarding:capture-anchor-seen";
+
+export function HomeScreen({
+  currentEvent,
+  onOpenPeopleFilter,
+  onRequestOpenEvents,
+}: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
@@ -37,6 +46,8 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
+  const [showEventOnboarding, setShowEventOnboarding] = useState(false);
+  const [showCaptureOnboarding, setShowCaptureOnboarding] = useState(false);
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const dueTodayPeople = useMemo(
@@ -148,6 +159,66 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     loadData();
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function syncOnboardingState() {
+      const [eventSeen, captureSeen] = await AsyncStorage.multiGet([
+        EVENT_ONBOARDING_KEY,
+        CAPTURE_ONBOARDING_KEY,
+      ]);
+
+      if (!isMounted) {
+        return;
+      }
+
+      const hasCurrentEvent = Boolean(currentEvent);
+      setShowEventOnboarding(!hasCurrentEvent && eventSeen?.[1] !== "true");
+      setShowCaptureOnboarding(hasCurrentEvent && people.length === 0 && captureSeen?.[1] !== "true");
+    }
+
+    void syncOnboardingState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentEvent, people.length]);
+
+  useEffect(() => {
+    if (!currentEvent) {
+      return;
+    }
+
+    void AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
+    setShowEventOnboarding(false);
+  }, [currentEvent]);
+
+  async function dismissEventOnboarding() {
+    setShowEventOnboarding(false);
+    await AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
+  }
+
+  async function dismissCaptureOnboarding() {
+    setShowCaptureOnboarding(false);
+    await AsyncStorage.setItem(CAPTURE_ONBOARDING_KEY, "true");
+  }
+
+  async function handleEventOnboardingPress() {
+    await dismissEventOnboarding();
+
+    if (onRequestOpenEvents) {
+      onRequestOpenEvents();
+      return;
+    }
+
+    Alert.alert("Set current event", "Open the Events tab and create or select the event you are at right now.");
+  }
+
+  async function handleCaptureOnboardingPress() {
+    await dismissCaptureOnboarding();
+    openCapture();
+  }
+
   async function handleSaveDraft(draft: ParsedPersonDraft) {
     if (isSaving) {
       return;
@@ -254,6 +325,34 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                   ? `${currentEventSummary.total} people added · ${currentEventSummary.outstanding} still need follow-up.`
                   : "Any person saved now will be attached to this event."}
               </Typography>
+            </Card>
+          ) : null}
+
+          {showEventOnboarding ? (
+            <Card style={styles.onboardingCard}>
+              <Typography variant="caption">Start here</Typography>
+              <Typography variant="h2">You are probably at an event right now.</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Set your current event first so every connection you capture has context from the start.
+              </Typography>
+              <View style={styles.onboardingActions}>
+                <Button label="Set current event" onPress={() => void handleEventOnboardingPress()} fullWidth={false} />
+                <Button label="Dismiss" onPress={() => void dismissEventOnboarding()} variant="ghost" fullWidth={false} />
+              </View>
+            </Card>
+          ) : null}
+
+          {showCaptureOnboarding ? (
+            <Card style={styles.onboardingCard}>
+              <Typography variant="caption">Next step</Typography>
+              <Typography variant="h2">Great. Who did you just meet?</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Capture your first connection from {currentEvent?.name || "this event"} and let Blackbook draft the follow-up for you.
+              </Typography>
+              <View style={styles.onboardingActions}>
+                <Button label="Add connection" onPress={() => void handleCaptureOnboardingPress()} fullWidth={false} />
+                <Button label="Dismiss" onPress={() => void dismissCaptureOnboarding()} variant="ghost" fullWidth={false} />
+              </View>
             </Card>
           ) : null}
 
@@ -469,6 +568,15 @@ const styles = StyleSheet.create({
   currentEventCard: {
     backgroundColor: colors.surface,
     gap: 10,
+  },
+  onboardingCard: {
+    gap: 12,
+    borderColor: colors.primaryAction,
+  },
+  onboardingActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
   },
   currentEventTopRow: {
     flexDirection: "row",

@@ -19,6 +19,7 @@ export type PersonRow = {
 
 export type EventRow = {
   category: EventCategory | null;
+  event_date: string | null;
   id: string;
   name: string;
   created_at: string;
@@ -82,6 +83,7 @@ export type EventInsight = {
   id: string;
   name: string;
   createdAt: string;
+  eventDate: string | null;
   category: EventCategory;
   interactionCount: number;
   peopleCount: number;
@@ -186,6 +188,29 @@ export function formatFollowUpDate(value?: string | null) {
   const parsed = parseDateOnlyString(value);
   if (!parsed) {
     return "No follow-up date";
+  }
+
+  return parsed.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function normalizeEventDate(value?: string | null) {
+  const trimmed = value?.trim() || "";
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = parseDateOnlyString(trimmed);
+  return parsed ? toDateOnlyString(parsed) : null;
+}
+
+export function formatEventDate(value?: string | null) {
+  const parsed = parseDateOnlyString(value);
+  if (!parsed) {
+    return "No date set";
   }
 
   return parsed.toLocaleDateString(undefined, {
@@ -334,27 +359,39 @@ export async function ensureSessionUserId() {
   return data.user.id;
 }
 
-export async function getOrCreateEvent(userId: string, name: string, category?: EventCategory | null) {
+export async function getOrCreateEvent(
+  userId: string,
+  name: string,
+  category?: EventCategory | null,
+  eventDate?: string | null
+) {
   const client = assertClient();
   const normalizedName = name.trim();
   const normalizedCategory = category || inferEventCategory(normalizedName, "");
+  const normalizedEventDate = normalizeEventDate(eventDate);
 
   const { data: existing, error: findError } = await client
     .from("events")
-    .select("id,name,category,created_at")
+    .select("id,name,category,event_date,created_at")
     .eq("user_id", userId)
     .ilike("name", normalizedName)
     .maybeSingle();
 
   assertNoError(findError);
   if (existing) {
-    if (normalizedCategory && existing.category !== normalizedCategory) {
+    const needsCategoryUpdate = normalizedCategory && existing.category !== normalizedCategory;
+    const needsDateUpdate = (existing.event_date || null) !== normalizedEventDate;
+
+    if (needsCategoryUpdate || needsDateUpdate) {
       const { data: updated, error: updateError } = await client
         .from("events")
-        .update({ category: normalizedCategory })
+        .update({
+          category: normalizedCategory,
+          event_date: normalizedEventDate,
+        })
         .eq("user_id", userId)
         .eq("id", existing.id)
-        .select("id,name,category,created_at")
+        .select("id,name,category,event_date,created_at")
         .single();
 
       assertNoError(updateError);
@@ -366,8 +403,13 @@ export async function getOrCreateEvent(userId: string, name: string, category?: 
 
   const { data: inserted, error: insertError } = await client
     .from("events")
-    .insert({ user_id: userId, name: normalizedName, category: normalizedCategory })
-    .select("id,name,category,created_at")
+    .insert({
+      user_id: userId,
+      name: normalizedName,
+      category: normalizedCategory,
+      event_date: normalizedEventDate,
+    })
+    .select("id,name,category,event_date,created_at")
     .single();
 
   assertNoError(insertError);
@@ -491,6 +533,7 @@ export async function updateEventDetails(input: {
   eventId: string;
   name: string;
   category?: EventCategory | null;
+  eventDate?: string | null;
 }) {
   const client = assertClient();
   const normalizedName = input.name.trim();
@@ -504,6 +547,7 @@ export async function updateEventDetails(input: {
     .update({
       name: normalizedName,
       category: input.category || inferEventCategory(normalizedName, ""),
+      event_date: normalizeEventDate(input.eventDate),
     })
     .eq("user_id", input.userId)
     .eq("id", input.eventId);
@@ -570,7 +614,7 @@ export async function listRecentEvents(userId: string, limit = 5) {
 
   const { data, error } = await client
     .from("events")
-    .select("id,name,category,created_at")
+    .select("id,name,category,event_date,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -735,6 +779,7 @@ export async function listEventInsights(userId: string) {
       id: event.id,
       name: event.name,
       createdAt: event.created_at,
+      eventDate: event.event_date || null,
       category: inferEventCategory(event.name, lastInteraction?.raw_note, event.category),
       interactionCount: eventInteractions.length,
       peopleCount: peopleNames.length,
