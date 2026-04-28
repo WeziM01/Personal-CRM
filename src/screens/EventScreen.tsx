@@ -29,7 +29,6 @@ import {
   listAllInteractions,
   listEventInsights,
   listPeopleInsights,
-  toDateOnlyString,
   updateEventDetails,
 } from "../lib/crm";
 import { colors, layout } from "../theme/tokens";
@@ -39,7 +38,6 @@ type SortMode = "recent" | "name" | "people" | "notes";
 type EventEditorDraft = {
   name: string;
   category: (typeof EVENT_CATEGORY_OPTIONS)[number]["value"] | "";
-  eventDate: string;
 };
 
 type EventScreenProps = {
@@ -56,7 +54,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
   const [isDeletingEvent, setDeletingEvent] = useState(false);
   const [deleteArmedEventId, setDeleteArmedEventId] = useState<string | null>(null);
   const [eventEditorMode, setEventEditorMode] = useState<"create" | "edit">("create");
-  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "", eventDate: toDateOnlyString(new Date()) });
+  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "" });
   const [captureInitialDraft, setCaptureInitialDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const [captureLockedEvent, setCaptureLockedEvent] = useState<CurrentEventValue | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
@@ -186,7 +184,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name: currentEvent?.name || "",
       category: currentEvent?.category || "",
-      eventDate: toDateOnlyString(new Date()),
     });
     setEventEditorOpen(true);
   }
@@ -196,7 +193,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name,
       category: currentEvent?.category || "",
-      eventDate: toDateOnlyString(new Date()),
     });
     setEventEditorOpen(true);
   }
@@ -207,7 +203,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     }
 
     setEventEditorMode("edit");
-    setEventDraft({ name: selectedEvent.name, category: selectedEvent.category, eventDate: selectedEvent.eventDate || toDateOnlyString(new Date()) });
+    setEventDraft({ name: selectedEvent.name, category: selectedEvent.category });
     setEventEditorOpen(true);
   }
 
@@ -241,7 +237,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
       setSavingEvent(true);
       const userId = await ensureSessionUserId();
       const category = eventDraft.category && eventDraft.category !== "all" ? eventDraft.category : null;
-      const eventDate = eventDraft.eventDate.trim() || null;
 
       if (eventEditorMode === "edit" && selectedEvent) {
         await updateEventDetails({
@@ -249,10 +244,9 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           eventId: selectedEvent.id,
           name,
           category,
-          eventDate,
         });
       } else {
-        const event = await getOrCreateEvent(userId, name, category, eventDate);
+        const event = await getOrCreateEvent(userId, name, category);
         setSelectedEventId(event.id);
       }
 
@@ -329,6 +323,8 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         draft.linkedinUrl,
         draft.email,
         draft.phoneNumber,
+        draft.preferredChannel,
+        draft.preferredChannelOther,
         draft.priority,
         draft.tags
       );
@@ -443,23 +439,11 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
             </Card>
           ) : null}
 
-          {!isLoading && events.length === 0 ? (
-            <Card style={styles.emptyStateCard}>
-              <Typography variant="h2">No active events.</Typography>
-              <Typography variant="body" style={styles.secondaryText}>
-                Heading somewhere exciting? Track your connections by creating an event.
-              </Typography>
-              <View style={styles.emptyStateActions}>
-                <Button label="Create New Event" onPress={openCreateEvent} fullWidth={false} size="compact" />
-              </View>
-            </Card>
-          ) : null}
-
           {selectedEvent ? (
             <Card style={styles.featureCard}>
               <Typography variant="h2">{selectedEvent.name}</Typography>
               <Typography variant="caption" style={styles.secondaryText}>
-                {formatCategoryLabel(selectedEvent.category)}{selectedEvent.eventDate ? ` · ${selectedEvent.eventDate}` : ""} · {selectedEvent.interactionCount} notes · {selectedEvent.peopleCount} people
+                {formatCategoryLabel(selectedEvent.category)} · {selectedEvent.interactionCount} notes · {selectedEvent.peopleCount} people
               </Typography>
               <Typography variant="caption">
                 Due today {selectedEventFollowUpSummary.dueToday} · Overdue {selectedEventFollowUpSummary.overdue} · Upcoming {selectedEventFollowUpSummary.upcoming}
@@ -502,7 +486,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                     >
                       <View style={styles.eventHeader}>
                         <Typography variant="body" style={styles.secondaryText}>
-                          {formatCategoryLabel(event.category as never)}{event.eventDate ? ` · ${event.eventDate}` : ""}
+                          {formatCategoryLabel(event.category as never)}
                         </Typography>
                         <Typography variant="caption">{event.lastConnectedLabel}</Typography>
                       </View>
@@ -525,7 +509,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                     <Button label="Edit before saving" onPress={() => openCreateEventWithName(searchQuery.trim())} variant="ghost" fullWidth={false} size="compact" />
                   </View>
                 </Card>
-              ) : events.length === 0 ? null : (
+              ) : (
                 <Typography variant="body">No event categories match this filter yet.</Typography>
               )
             ) : null}
@@ -615,19 +599,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                   style={styles.searchInput}
                   value={eventDraft.name}
                   onChangeText={(value) => setEventDraft((current) => ({ ...current, name: value }))}
-                />
-
-                <Typography variant="caption" style={styles.subSectionLabel}>
-                  Event date
-                </Typography>
-                <TextInput
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor={colors.textTertiary}
-                  style={styles.searchInput}
-                  value={eventDraft.eventDate}
-                  onChangeText={(value) => setEventDraft((current) => ({ ...current, eventDate: value }))}
-                  autoCapitalize="none"
-                  autoCorrect={false}
                 />
 
                 <Typography variant="caption" style={styles.subSectionLabel}>

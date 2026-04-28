@@ -39,6 +39,7 @@ import {
   getSuggestedFollowUpPreset,
   PERSON_TAG_SUGGESTIONS,
   PersonPriority,
+  PreferredChannel,
 } from "../lib/crm";
 import { colors, layout, radius } from "../theme/tokens";
 
@@ -52,6 +53,8 @@ export type ParsedPersonDraft = {
   linkedinUrl: string;
   email: string;
   phoneNumber: string;
+  preferredChannel: PreferredChannel | "";
+  preferredChannelOther: string;
   event: string;
   eventCategory: EventCategory | "";
   whatMatters: string;
@@ -69,6 +72,8 @@ const emptyDraft: ParsedPersonDraft = {
   linkedinUrl: "",
   email: "",
   phoneNumber: "",
+  preferredChannel: "",
+  preferredChannelOther: "",
   event: "",
   eventCategory: "",
   whatMatters: "",
@@ -77,6 +82,14 @@ const emptyDraft: ParsedPersonDraft = {
   followUpPreset: "",
   rawInput: "",
 };
+
+const preferredChannelOptions: Array<{ label: string; value: PreferredChannel }> = [
+  { label: "LinkedIn", value: "linkedin" },
+  { label: "WhatsApp", value: "whatsapp" },
+  { label: "Email", value: "email" },
+  { label: "Phone", value: "phone" },
+  { label: "Other", value: "other" },
+];
 
 export type LockedEventDraft = {
   name: string;
@@ -558,6 +571,14 @@ export function CaptureModal({
     });
   }
 
+  function handlePreferredChannelSelect(channel: PreferredChannel) {
+    setDraft((current) => ({
+      ...current,
+      preferredChannel: channel,
+      preferredChannelOther: channel === "other" ? current.preferredChannelOther : "",
+    }));
+  }
+
   function handleSave() {
     if (isSaving || !canSave) {
       return;
@@ -572,6 +593,8 @@ export function CaptureModal({
       linkedinUrl: cleanValue(draft.linkedinUrl),
       email: cleanValue(draft.email),
       phoneNumber: cleanValue(draft.phoneNumber),
+      preferredChannel: draft.preferredChannel,
+      preferredChannelOther: cleanValue(draft.preferredChannelOther),
       event: cleanValue(draft.event) || "No event",
       eventCategory: draft.eventCategory,
       whatMatters: cleanValue(draft.whatMatters),
@@ -781,6 +804,36 @@ export function CaptureModal({
                   <Typography variant="caption" style={styles.tagSummary}>
                     Selected: {draft.tags.join(", ")}
                   </Typography>
+                ) : null}
+              </View>
+
+              <View style={styles.chipSection}>
+                <Typography variant="caption">Preferred contact method</Typography>
+                <Typography variant="body" style={styles.helperText}>
+                  Save the channel they actually want you to use later.
+                </Typography>
+                <View style={styles.chipRow}>
+                  {preferredChannelOptions.map((option) => (
+                    <Button
+                      key={option.value}
+                      label={option.label}
+                      onPress={() => handlePreferredChannelSelect(option.value)}
+                      variant={draft.preferredChannel === option.value ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  ))}
+                </View>
+                {draft.preferredChannel === "other" ? (
+                  <TextInput
+                    placeholder="Instagram, Discord, Telegram..."
+                    placeholderTextColor={colors.textTertiary}
+                    style={[styles.fieldInput, styles.inlineInputTop]}
+                    value={draft.preferredChannelOther}
+                    onChangeText={(value) => updateField("preferredChannelOther", value)}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
                 ) : null}
               </View>
             </Card>
@@ -1071,6 +1124,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 180,
     gap: 8,
+  },
+  inlineInputTop: {
+    marginTop: 10,
   },
   fieldInput: {
     minHeight: layout.minTouchTarget,

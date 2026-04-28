@@ -11,13 +11,14 @@ export type PersonRow = {
   name: string | null;
   phone_number: string | null;
   priority: PersonPriority;
+  preferred_channel: PreferredChannel | null;
+  preferred_channel_other: string | null;
   tags: string[];
   created_at: string;
 };
 
 export type EventRow = {
   category: EventCategory | null;
-  event_date: string | null;
   id: string;
   name: string;
   created_at: string;
@@ -46,6 +47,7 @@ export type EventCategory =
 
 export type PersonPriority = "high" | "medium" | "low";
 export type FollowUpPreset = "tomorrow" | "in3days" | "nextWeek" | "custom";
+export type PreferredChannel = "linkedin" | "whatsapp" | "email" | "phone" | "other";
 
 export type PersonInsight = {
   id: string;
@@ -55,6 +57,8 @@ export type PersonInsight = {
   linkedinUrl: string;
   email: string;
   phoneNumber: string;
+  preferredChannel: PreferredChannel | "";
+  preferredChannelOther: string;
   tags: string[];
   createdAt: string;
   interactionCount: number;
@@ -78,7 +82,6 @@ export type EventInsight = {
   id: string;
   name: string;
   createdAt: string;
-  eventDate: string | null;
   category: EventCategory;
   interactionCount: number;
   peopleCount: number;
@@ -284,6 +287,37 @@ export function normalizeTags(tags?: string[] | null) {
   );
 }
 
+export function normalizePreferredChannel(channel?: string | null): PreferredChannel | null {
+  if (
+    channel === "linkedin" ||
+    channel === "whatsapp" ||
+    channel === "email" ||
+    channel === "phone" ||
+    channel === "other"
+  ) {
+    return channel;
+  }
+
+  return null;
+}
+
+export function normalizePreferredChannelOther(value?: string | null) {
+  const trimmed = value?.trim() || "";
+  return trimmed || null;
+}
+
+export function formatPreferredChannelLabel(
+  channel?: PreferredChannel | "" | null,
+  otherValue?: string | null
+) {
+  if (channel === "linkedin") return "LinkedIn";
+  if (channel === "whatsapp") return "WhatsApp";
+  if (channel === "email") return "Email";
+  if (channel === "phone") return "Phone";
+  if (channel === "other") return otherValue?.trim() || "Other";
+  return "No preference";
+}
+
 export async function ensureSessionUserId() {
   const client = assertClient();
 
@@ -300,34 +334,27 @@ export async function ensureSessionUserId() {
   return data.user.id;
 }
 
-export async function getOrCreateEvent(userId: string, name: string, category?: EventCategory | null, eventDate?: string | null) {
+export async function getOrCreateEvent(userId: string, name: string, category?: EventCategory | null) {
   const client = assertClient();
   const normalizedName = name.trim();
   const normalizedCategory = category || inferEventCategory(normalizedName, "");
-  const normalizedEventDate = eventDate?.trim() || null;
 
   const { data: existing, error: findError } = await client
     .from("events")
-    .select("id,name,category,event_date,created_at")
+    .select("id,name,category,created_at")
     .eq("user_id", userId)
     .ilike("name", normalizedName)
     .maybeSingle();
 
   assertNoError(findError);
   if (existing) {
-    const shouldUpdateCategory = normalizedCategory && existing.category !== normalizedCategory;
-    const shouldUpdateDate = normalizedEventDate !== null && existing.event_date !== normalizedEventDate;
-
-    if (shouldUpdateCategory || shouldUpdateDate) {
+    if (normalizedCategory && existing.category !== normalizedCategory) {
       const { data: updated, error: updateError } = await client
         .from("events")
-        .update({
-          category: shouldUpdateCategory ? normalizedCategory : existing.category,
-          event_date: shouldUpdateDate ? normalizedEventDate : existing.event_date,
-        })
+        .update({ category: normalizedCategory })
         .eq("user_id", userId)
         .eq("id", existing.id)
-        .select("id,name,category,event_date,created_at")
+        .select("id,name,category,created_at")
         .single();
 
       assertNoError(updateError);
@@ -339,8 +366,8 @@ export async function getOrCreateEvent(userId: string, name: string, category?: 
 
   const { data: inserted, error: insertError } = await client
     .from("events")
-    .insert({ user_id: userId, name: normalizedName, category: normalizedCategory, event_date: normalizedEventDate })
-    .select("id,name,category,event_date,created_at")
+    .insert({ user_id: userId, name: normalizedName, category: normalizedCategory })
+    .select("id,name,category,created_at")
     .single();
 
   assertNoError(insertError);
@@ -354,6 +381,8 @@ export async function createPerson(
   linkedinUrl?: string,
   email?: string,
   phoneNumber?: string,
+  preferredChannel?: PreferredChannel | "",
+  preferredChannelOther?: string,
   priority: PersonPriority = "medium",
   tags: string[] = []
 ) {
@@ -370,10 +399,12 @@ export async function createPerson(
       linkedin_url: normalizeLinkedInUrl(linkedinUrl),
       email: normalizeEmail(email),
       phone_number: normalizePhoneNumber(phoneNumber),
+      preferred_channel: normalizePreferredChannel(preferredChannel),
+      preferred_channel_other: normalizePreferredChannelOther(preferredChannelOther),
       priority,
       tags: normalizedTags,
     })
-    .select("id,name,company,is_vip,linkedin_url,email,phone_number,priority,tags,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,preferred_channel,preferred_channel_other,priority,tags,created_at")
     .single();
 
   assertNoError(error);
@@ -406,6 +437,8 @@ export async function updatePersonDetails(input: {
   linkedinUrl?: string;
   email?: string;
   phoneNumber?: string;
+  preferredChannel?: PreferredChannel | "";
+  preferredChannelOther?: string;
   priority?: PersonPriority;
   tags?: string[];
 }) {
@@ -422,6 +455,8 @@ export async function updatePersonDetails(input: {
       linkedin_url: normalizeLinkedInUrl(input.linkedinUrl),
       email: normalizeEmail(input.email),
       phone_number: normalizePhoneNumber(input.phoneNumber),
+      preferred_channel: normalizePreferredChannel(input.preferredChannel),
+      preferred_channel_other: normalizePreferredChannelOther(input.preferredChannelOther),
       priority: normalizedPriority,
       tags: normalizedTags,
     })
@@ -456,7 +491,6 @@ export async function updateEventDetails(input: {
   eventId: string;
   name: string;
   category?: EventCategory | null;
-  eventDate?: string | null;
 }) {
   const client = assertClient();
   const normalizedName = input.name.trim();
@@ -470,7 +504,6 @@ export async function updateEventDetails(input: {
     .update({
       name: normalizedName,
       category: input.category || inferEventCategory(normalizedName, ""),
-      event_date: input.eventDate?.trim() || null,
     })
     .eq("user_id", input.userId)
     .eq("id", input.eventId);
@@ -523,7 +556,7 @@ export async function listRecentPeople(userId: string, limit = 8) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,email,phone_number,priority,tags,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,preferred_channel,preferred_channel_other,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -537,7 +570,7 @@ export async function listRecentEvents(userId: string, limit = 5) {
 
   const { data, error } = await client
     .from("events")
-    .select("id,name,category,event_date,created_at")
+    .select("id,name,category,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -599,7 +632,7 @@ export async function getFirstPerson(userId: string) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,email,phone_number,priority,tags,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,preferred_channel,preferred_channel_other,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -643,6 +676,8 @@ export async function listPeopleInsights(userId: string) {
       linkedinUrl: person.linkedin_url || "",
       email: person.email || "",
       phoneNumber: person.phone_number || "",
+      preferredChannel: normalizePreferredChannel(person.preferred_channel) || "",
+      preferredChannelOther: person.preferred_channel_other || "",
       tags,
       createdAt: person.created_at,
       interactionCount: personInteractions.length,
@@ -700,7 +735,6 @@ export async function listEventInsights(userId: string) {
       id: event.id,
       name: event.name,
       createdAt: event.created_at,
-      eventDate: event.event_date || null,
       category: inferEventCategory(event.name, lastInteraction?.raw_note, event.category),
       interactionCount: eventInteractions.length,
       peopleCount: peopleNames.length,
