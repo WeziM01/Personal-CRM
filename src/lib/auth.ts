@@ -258,7 +258,7 @@ export async function signInAsGuest() {
   }
 }
 
-export async function sendMagicLink(email: string, guestUserId?: string | null) {
+export async function sendMagicLink(email: string) {
   const client = assertClient();
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -269,8 +269,6 @@ export async function sendMagicLink(email: string, guestUserId?: string | null) 
   if (!authRedirectUrl) {
     throw new Error("Missing EXPO_PUBLIC_AUTH_REDIRECT_URL. Set it to your app URL before using magic links.");
   }
-
-  await prepareGuestUpgrade(guestUserId);
 
   const { error } = await client.auth.signInWithOtp({
     email: normalizedEmail,
@@ -285,14 +283,12 @@ export async function sendMagicLink(email: string, guestUserId?: string | null) 
   }
 }
 
-export async function signInWithGoogle(guestUserId?: string | null) {
+export async function signInWithGoogle() {
   const client = assertClient();
 
   if (!authRedirectUrl) {
     throw new Error("Missing EXPO_PUBLIC_AUTH_REDIRECT_URL. Set it to your app URL before using Google sign-in.");
   }
-
-  await prepareGuestUpgrade(guestUserId);
 
   const { error } = await client.auth.signInWithOAuth({
     provider: "google",

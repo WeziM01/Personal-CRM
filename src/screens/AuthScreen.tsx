@@ -1,15 +1,14 @@
+
 import { useMemo, useState } from "react";
 import { SafeAreaView, StyleSheet, TextInput, View } from "react-native";
 
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
-import { sendMagicLink, signInAsGuest, signInWithGoogle } from "../lib/auth";
+import { sendMagicLink, signInWithGoogle } from "../lib/auth";
 import { colors, layout, radius } from "../theme/tokens";
 
 type AuthScreenProps = {
-  canUseGuest?: boolean;
-  guestUserId?: string | null;
   authError?: string | null;
   onAuthenticated?: (message: string) => void;
   onCancel?: () => void;
@@ -21,8 +20,6 @@ type BannerState = {
 } | null;
 
 export function AuthScreen({
-  canUseGuest = true,
-  guestUserId = null,
   authError = null,
   onAuthenticated,
   onCancel,
@@ -31,32 +28,16 @@ export function AuthScreen({
   const [banner, setBanner] = useState<BannerState>(authError ? { text: authError, tone: "error" } : null);
   const [isGoogleBusy, setGoogleBusy] = useState(false);
   const [isMagicLinkBusy, setMagicLinkBusy] = useState(false);
-  const [isGuestBusy, setGuestBusy] = useState(false);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
   const canSendMagicLink = normalizedEmail.includes("@");
-  const isBusy = isGoogleBusy || isMagicLinkBusy || isGuestBusy;
-
-  async function handleGuest() {
-    try {
-      setGuestBusy(true);
-      setBanner(null);
-      await signInAsGuest();
-      const message = "Guest mode active.";
-      setBanner({ text: message, tone: "success" });
-      onAuthenticated?.(message);
-    } catch (error) {
-      setBanner({ text: error instanceof Error ? error.message : "Failed to start guest mode.", tone: "error" });
-    } finally {
-      setGuestBusy(false);
-    }
-  }
+  const isBusy = isGoogleBusy || isMagicLinkBusy;
 
   async function handleGoogle() {
     try {
       setGoogleBusy(true);
       setBanner(null);
-      await signInWithGoogle(guestUserId);
+      await signInWithGoogle();
     } catch (error) {
       setBanner({ text: error instanceof Error ? error.message : "Google sign-in failed.", tone: "error" });
       setGoogleBusy(false);
@@ -67,7 +48,7 @@ export function AuthScreen({
     try {
       setMagicLinkBusy(true);
       setBanner(null);
-      await sendMagicLink(normalizedEmail, guestUserId);
+      await sendMagicLink(normalizedEmail);
       const message = `Magic link sent to ${normalizedEmail}. Check your inbox to continue.`;
       setBanner({ text: message, tone: "success" });
       onAuthenticated?.(message);
@@ -109,51 +90,55 @@ export function AuthScreen({
               style={styles.input}
             />
             <Typography variant="body" style={styles.helperText}>
-              Passwordless sign-in is fastest for testing and keeps your auth flow simple.
+              Passwordless sign-in keeps people coming back without losing their progress.
             </Typography>
           </View>
 
-          <View style={styles.primaryActions}>
-            <Button label="Continue with Google" onPress={handleGoogle} loading={isGoogleBusy} disabled={isBusy && !isGoogleBusy} />
-            <Button
-              label="Email me a magic link"
-              onPress={handleMagicLink}
-              disabled={!canSendMagicLink || (isBusy && !isMagicLinkBusy)}
-              loading={isMagicLinkBusy}
-              variant="ghost"
-            />
-          </View>
-
-          <View style={styles.metaStrip}>
-            <View style={styles.metaItem}>
-              <Typography variant="caption">Fast setup</Typography>
-              <Typography variant="body" style={styles.metaText}>Google or magic link only</Typography>
-            </View>
-            <View style={styles.metaItem}>
-              <Typography variant="caption">Guest safe</Typography>
-              <Typography variant="body" style={styles.metaText}>Guest data upgrades later</Typography>
-            </View>
-          </View>
-
-          {guestUserId ? (
-            <Card style={styles.guestCard}>
-              <Typography variant="caption">Guest progress detected</Typography>
-              <Typography variant="body" style={styles.helperText}>
-                Your guest data will be imported automatically after you finish signing in.
-              </Typography>
-            </Card>
-          ) : null}
-
-          {canUseGuest ? <Button label="Use as guest" onPress={handleGuest} variant="ghost" disabled={isBusy && !isGuestBusy} loading={isGuestBusy} /> : null}
-          {onCancel ? <Button label="Cancel" onPress={onCancel} variant="ghost" disabled={isBusy} /> : null}
-
           {banner ? (
-            <View style={[styles.banner, banner.tone === "success" ? styles.bannerSuccess : styles.bannerError]}>
+            <View
+              style={[
+                styles.banner,
+                banner.tone === "success" ? styles.bannerSuccess : styles.bannerError,
+              ]}
+            >
               <Typography variant="body" style={styles.bannerText}>
                 {banner.text}
               </Typography>
             </View>
           ) : null}
+
+          <View style={styles.actionStack}>
+            <Button
+              label="Email me a magic link"
+              onPress={() => void handleMagicLink()}
+              disabled={!canSendMagicLink || isBusy}
+              loading={isMagicLinkBusy}
+            />
+            <Button
+              label="Continue with Google"
+              onPress={() => void handleGoogle()}
+              variant="ghost"
+              disabled={isBusy}
+              loading={isGoogleBusy}
+            />
+          </View>
+
+          <View style={styles.metaRow}>
+            <View style={styles.metaItem}>
+              <Typography variant="caption">Magic link</Typography>
+              <Typography variant="body" style={styles.metaText}>Fast return on the same device</Typography>
+            </View>
+            <View style={styles.metaItem}>
+              <Typography variant="caption">Google</Typography>
+              <Typography variant="body" style={styles.metaText}>One tap and done</Typography>
+            </View>
+            <View style={styles.metaItem}>
+              <Typography variant="caption">Recoverable</Typography>
+              <Typography variant="body" style={styles.metaText}>No guest data to lose later</Typography>
+            </View>
+          </View>
+
+          {onCancel ? <Button label="Cancel" onPress={onCancel} variant="ghost" disabled={isBusy} /> : null}
         </Card>
       </View>
     </SafeAreaView>
@@ -167,27 +152,31 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    backgroundColor: colors.background,
     paddingHorizontal: layout.screenPaddingHorizontal,
-    paddingTop: layout.sectionGap,
-    paddingBottom: layout.sectionGap,
-    gap: layout.sectionGap,
+    paddingVertical: layout.stackGap,
+    gap: 18,
+    backgroundColor: colors.background,
     justifyContent: "center",
   },
   headerCard: {
-    gap: 10,
+    borderRadius: 28,
+    padding: 24,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 12,
   },
   headerTopRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
     gap: 12,
+    alignItems: "center",
   },
   livePill: {
-    borderRadius: radius.pill,
-    backgroundColor: colors.accentSoft,
     paddingHorizontal: 12,
     paddingVertical: 8,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -196,67 +185,59 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     color: colors.textSecondary,
-    maxWidth: 540,
+  },
+  modeCard: {
+    gap: 16,
+  },
+  inputBlock: {
+    gap: 8,
+  },
+  input: {
+    minHeight: 52,
+    borderRadius: radius.button,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    color: colors.textPrimary,
+    paddingHorizontal: 16,
+    fontSize: 16,
   },
   helperText: {
     color: colors.textSecondary,
   },
-  modeCard: {
-    gap: 16,
-    borderRadius: radius.cardLg,
-  },
-  inputBlock: {
-    gap: 10,
-  },
-  input: {
-    minHeight: 52,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 18,
-    backgroundColor: colors.surfaceMuted,
-    color: colors.textPrimary,
-    fontSize: 16,
-  },
-  primaryActions: {
-    gap: 10,
-  },
-  metaStrip: {
-    flexDirection: "row",
-    gap: 10,
-    flexWrap: "wrap",
-  },
-  metaItem: {
-    flex: 1,
-    minWidth: 160,
-    borderRadius: 18,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 4,
-  },
-  metaText: {
-    color: colors.textSecondary,
-  },
-  guestCard: {
-    backgroundColor: colors.surfaceMuted,
-    gap: 6,
-  },
   banner: {
+    borderRadius: radius.button,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: 16,
-    borderWidth: 1,
   },
   bannerSuccess: {
-    borderColor: colors.success,
     backgroundColor: colors.successSoft,
   },
   bannerError: {
-    borderColor: colors.destructive,
-    backgroundColor: "#FDECEC",
+    backgroundColor: colors.accentSoft,
   },
   bannerText: {
     color: colors.textPrimary,
+  },
+  actionStack: {
+    gap: 12,
+  },
+  metaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  metaItem: {
+    flex: 1,
+    minWidth: 120,
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 6,
+  },
+  metaText: {
+    color: colors.textSecondary,
   },
 });

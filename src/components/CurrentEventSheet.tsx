@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import { Modal, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
 
@@ -10,6 +11,8 @@ import { Typography } from "./ui/Typography";
 export type CurrentEventValue = {
   name: string;
   category: EventCategory;
+  eventDate?: string | null;
+  customCategoryLabel?: string | null;
 };
 
 type CurrentEventSheetProps = {
@@ -20,16 +23,28 @@ type CurrentEventSheetProps = {
   onClear: () => void;
 };
 
+function formatCurrentEventType(value: CurrentEventValue | { category: EventCategory; customCategoryLabel?: string | null }) {
+  if (value.category === "other" && value.customCategoryLabel?.trim()) {
+    return value.customCategoryLabel.trim();
+  }
+
+  return formatCategoryLabel(value.category);
+}
+
 export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: CurrentEventSheetProps) {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 720;
   const [name, setName] = useState("");
   const [category, setCategory] = useState<EventCategory>("networking");
+  const [eventDate, setEventDate] = useState("");
+  const [customCategoryLabel, setCustomCategoryLabel] = useState("");
 
   useEffect(() => {
     if (visible) {
       setName(value?.name || "");
       setCategory(value?.category || "networking");
+      setEventDate(value?.eventDate || "");
+      setCustomCategoryLabel(value?.customCategoryLabel || "");
     }
   }, [value, visible]);
 
@@ -38,7 +53,12 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
       return;
     }
 
-    onSave({ name: name.trim(), category });
+    onSave({
+      name: name.trim(),
+      category,
+      eventDate: eventDate.trim() || null,
+      customCategoryLabel: category === "other" ? customCategoryLabel.trim() || null : null,
+    });
   }
 
   return (
@@ -51,26 +71,37 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.headerRow}>
-            <Typography variant="h1">Set Event Mode</Typography>
+            <Typography variant="h1">Set Current Event</Typography>
             <Button label="Close" onPress={onClose} variant="ghost" fullWidth={false} size="compact" />
           </View>
 
           <Card style={styles.heroCard}>
             <Typography variant="caption">Current mode</Typography>
             <Typography variant="body" style={styles.heroText}>
-              Set this once and every new person or interaction will automatically inherit the same event and type until you switch back to past-event mode.
+              Set this once and every new person or interaction will automatically inherit the same event context until you switch back to past-event mode.
             </Typography>
           </Card>
 
           <Card>
             <Typography variant="caption">Event name</Typography>
             <TextInput
-              placeholder="React Native EU"
+              placeholder="Sifted Summit"
               placeholderTextColor={colors.textTertiary}
               value={name}
               onChangeText={setName}
               style={styles.input}
               autoFocus
+            />
+
+            <Typography variant="caption" style={styles.labelSpacing}>Event date</Typography>
+            <TextInput
+              placeholder="2026-04-28"
+              placeholderTextColor={colors.textTertiary}
+              value={eventDate}
+              onChangeText={setEventDate}
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
             />
 
             <Typography variant="caption" style={styles.labelSpacing}>Event type</Typography>
@@ -86,12 +117,26 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
                 />
               ))}
             </View>
+
+            {category === "other" ? (
+              <View style={styles.inlineInputTop}>
+                <Typography variant="caption">Custom event type</Typography>
+                <TextInput
+                  placeholder="Private dinner, accelerator demo day..."
+                  placeholderTextColor={colors.textTertiary}
+                  value={customCategoryLabel}
+                  onChangeText={setCustomCategoryLabel}
+                  style={styles.input}
+                />
+              </View>
+            ) : null}
           </Card>
 
           <Card>
             <Typography variant="caption">Preview</Typography>
             <Typography variant="body" style={styles.heroText}>
-              New saves will tag to {name.trim() || "your event"} · {formatCategoryLabel(category)}.
+              New saves will tag to {name.trim() || "your event"} · {formatCurrentEventType({ category, customCategoryLabel })}.
+              {eventDate.trim() ? ` Date: ${eventDate.trim()}.` : " Add a date now so next-day wrap-up can sync later."}
             </Typography>
           </Card>
 
@@ -153,6 +198,9 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
     marginTop: 10,
+  },
+  inlineInputTop: {
+    marginTop: 16,
   },
   footerButtons: {
     gap: 12,

@@ -26,19 +26,15 @@ import { PersonStatusMode } from "./PersonProfileScreen";
 type HomeScreenProps = {
   currentEvent: CurrentEventValue | null;
   onOpenPeopleFilter?: (status: PersonStatusMode) => void;
-  onRequestOpenEvents?: () => void;
+  onRequestOpenCurrentEvent?: () => void;
 };
 
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
-const EVENT_ONBOARDING_KEY = "blackbook:onboarding:event-anchor-seen";
-const CAPTURE_ONBOARDING_KEY = "blackbook:onboarding:capture-anchor-seen";
+const EVENT_ONBOARDING_KEY = "blackbook.onboarding.event";
+const CAPTURE_ONBOARDING_KEY = "blackbook.onboarding.capture";
 
-export function HomeScreen({
-  currentEvent,
-  onOpenPeopleFilter,
-  onRequestOpenEvents,
-}: HomeScreenProps) {
+export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurrentEvent }: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
@@ -162,36 +158,33 @@ export function HomeScreen({
   useEffect(() => {
     let isMounted = true;
 
-    async function syncOnboardingState() {
-      const [eventSeen, captureSeen] = await AsyncStorage.multiGet([
-        EVENT_ONBOARDING_KEY,
-        CAPTURE_ONBOARDING_KEY,
-      ]);
+    async function syncOnboarding() {
+      const [eventSeen, captureSeen] = await AsyncStorage.multiGet([EVENT_ONBOARDING_KEY, CAPTURE_ONBOARDING_KEY]);
 
       if (!isMounted) {
         return;
       }
 
-      const hasCurrentEvent = Boolean(currentEvent);
+      const hasCurrentEvent = Boolean(currentEvent?.name);
       setShowEventOnboarding(!hasCurrentEvent && eventSeen?.[1] !== "true");
       setShowCaptureOnboarding(hasCurrentEvent && people.length === 0 && captureSeen?.[1] !== "true");
     }
 
-    void syncOnboardingState();
+    void syncOnboarding();
 
     return () => {
       isMounted = false;
     };
-  }, [currentEvent, people.length]);
+  }, [currentEvent?.name, people.length]);
 
   useEffect(() => {
-    if (!currentEvent) {
+    if (!currentEvent?.name) {
       return;
     }
 
     void AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
     setShowEventOnboarding(false);
-  }, [currentEvent]);
+  }, [currentEvent?.name]);
 
   async function dismissEventOnboarding() {
     setShowEventOnboarding(false);
@@ -203,18 +196,12 @@ export function HomeScreen({
     await AsyncStorage.setItem(CAPTURE_ONBOARDING_KEY, "true");
   }
 
-  async function handleEventOnboardingPress() {
+  async function handleOpenCurrentEventOnboarding() {
     await dismissEventOnboarding();
-
-    if (onRequestOpenEvents) {
-      onRequestOpenEvents();
-      return;
-    }
-
-    Alert.alert("Set current event", "Open the Events tab and create or select the event you are at right now.");
+    onRequestOpenCurrentEvent?.();
   }
 
-  async function handleCaptureOnboardingPress() {
+  async function handleOpenCaptureOnboarding() {
     await dismissCaptureOnboarding();
     openCapture();
   }
@@ -317,10 +304,15 @@ export function HomeScreen({
                 <View style={styles.liveBadge}>
                   <Typography variant="caption" style={styles.liveBadgeText}>Live event</Typography>
                 </View>
-                <Typography variant="caption">{formatCategoryLabel(currentEvent.category)}</Typography>
+                <Typography variant="caption">
+                  {currentEvent.category === "other" && currentEvent.customCategoryLabel?.trim()
+                    ? currentEvent.customCategoryLabel.trim()
+                    : formatCategoryLabel(currentEvent.category)}
+                </Typography>
               </View>
               <Typography variant="h2">{currentEvent.name}</Typography>
               <Typography variant="body" style={styles.sectionMeta}>
+                {currentEvent.eventDate?.trim() ? `${currentEvent.eventDate.trim()} · ` : ""}
                 {currentEventSummary
                   ? `${currentEventSummary.total} people added · ${currentEventSummary.outstanding} still need follow-up.`
                   : "Any person saved now will be attached to this event."}
@@ -331,12 +323,12 @@ export function HomeScreen({
           {showEventOnboarding ? (
             <Card style={styles.onboardingCard}>
               <Typography variant="caption">Start here</Typography>
-              <Typography variant="h2">You are probably at an event right now.</Typography>
+              <Typography variant="h2">You are at an event right now.</Typography>
               <Typography variant="body" style={styles.sectionMeta}>
-                Set your current event first so every connection you capture has context from the start.
+                Set your current event first so every connection you capture carries the right context from the start.
               </Typography>
               <View style={styles.onboardingActions}>
-                <Button label="Set current event" onPress={() => void handleEventOnboardingPress()} fullWidth={false} />
+                <Button label="Set current event" onPress={() => void handleOpenCurrentEventOnboarding()} fullWidth={false} />
                 <Button label="Dismiss" onPress={() => void dismissEventOnboarding()} variant="ghost" fullWidth={false} />
               </View>
             </Card>
@@ -347,10 +339,10 @@ export function HomeScreen({
               <Typography variant="caption">Next step</Typography>
               <Typography variant="h2">Great. Who did you just meet?</Typography>
               <Typography variant="body" style={styles.sectionMeta}>
-                Capture your first connection from {currentEvent?.name || "this event"} and let Blackbook draft the follow-up for you.
+                Capture your first connection from {currentEvent?.name || "this event"} and let the draft show the value instantly.
               </Typography>
               <View style={styles.onboardingActions}>
-                <Button label="Add connection" onPress={() => void handleCaptureOnboardingPress()} fullWidth={false} />
+                <Button label="Add connection" onPress={() => void handleOpenCaptureOnboarding()} fullWidth={false} />
                 <Button label="Dismiss" onPress={() => void dismissCaptureOnboarding()} variant="ghost" fullWidth={false} />
               </View>
             </Card>

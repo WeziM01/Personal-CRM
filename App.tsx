@@ -1,11 +1,12 @@
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Linking, Modal, SafeAreaView, Share, StyleSheet, View, useWindowDimensions } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
 import { formatCategoryLabel } from "./src/lib/crm";
-import { ensureProfileForUser, finalizeGuestUpgrade, getCurrentUsername, signInAsGuest, signOutCurrentUser } from "./src/lib/auth";
+import { ensureProfileForUser, getCurrentUsername, signOutCurrentUser } from "./src/lib/auth";
 import { supabaseConfigMessage } from "./src/lib/supabase";
 import { Button } from "./src/components/ui/Button";
 import { AuthScreen } from "./src/screens/AuthScreen";
@@ -17,13 +18,28 @@ import { colors } from "./src/theme/tokens";
 
 type ScreenKey = "home" | "event" | "person";
 
-const EARLY_ACCESS_WAITLIST_URL = "https://tally.so/r/xXPNkd";
+const CURRENT_EVENT_STORAGE_KEY = "blackbook.current_event";
+
+function formatCurrentEventChipLabel(event: CurrentEventValue | null) {
+  if (!event) {
+    return "Set Current Event";
+  }
+
+  const typeLabel = event.category === "other" && event.customCategoryLabel?.trim()
+    ? event.customCategoryLabel.trim()
+    : formatCategoryLabel(event.category);
+
+  return event.eventDate?.trim()
+    ? `Current: ${event.name} · ${typeLabel} · ${event.eventDate.trim()}`
+    : `Current: ${event.name} · ${typeLabel}`;
+}
 
 export default function App() {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 880;
   const isVeryCompactLayout = width < 520;
   const { user, isLoading, authError, clearAuthError } = useAuth();
+  const activeUser = user && !user.is_anonymous ? user : null;
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
   const [isPreparingAccount, setPreparingAccount] = useState(false);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
@@ -35,11 +51,6 @@ export default function App() {
   const [personStatusNonce, setPersonStatusNonce] = useState(0);
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
-  const previousWasGuest = useRef(false);
-
-  const isGuest = Boolean(user?.is_anonymous);
-  const guestBannerLabel = isCompactLayout ? "Guest mode active" : "Guest mode active · data is temporary";
-  const updatesBannerLabel = isCompactLayout ? "Click here for future news" : "Click here for future news";
 
   if (supabaseConfigMessage) {
     return (
@@ -59,57 +70,82 @@ export default function App() {
     );
   }
 
-  useEffect(() => {
-    let isMounted = true;
 
-    async function syncUsername() {
-      if (!user || user.is_anonymous) {
-        if (isMounted) {
-          setPreparingAccount(false);
-          setCurrentUsername(null);
-        }
-        return;
-      }
+useEffect(() => {
+  let isMounted = true;
 
+  async function syncUsername() {
+      if (!activeUser) {
       if (isMounted) {
-        setPreparingAccount(true);
+        setPreparingAccount(false);
+        setCurrentUsername(null);
       }
-
-      try {
-        await ensureProfileForUser(user);
-        await finalizeGuestUpgrade(user);
-        const username = await getCurrentUsername(user.id);
-        if (isMounted) {
-          setCurrentUsername(username);
-        }
-      } catch {
-        if (isMounted) {
-          setCurrentUsername(null);
-        }
-      } finally {
-        if (isMounted) {
-          setPreparingAccount(false);
-        }
-      }
+      return;
     }
 
-    void syncUsername();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user]);
-
-  useEffect(() => {
-    const isGuest = Boolean(user?.is_anonymous);
-
-    if (previousWasGuest.current && user && !isGuest) {
-      setAuthModalOpen(false);
-      setAccountMenuOpen(false);
+    if (isMounted) {
+      setPreparingAccount(true);
     }
 
-    previousWasGuest.current = isGuest;
-  }, [user]);
+    try {
+      await ensureProfileForUser(activeUser);
+        const username = await getCurrentUsername(activeUser.id);
+      if (isMounted) {
+        setCurrentUsername(username);
+      }
+    } catch {
+      if (isMounted) {
+        setCurrentUsername(null);
+      }
+    } finally {
+      if (isMounted) {
+        setPreparingAccount(false);
+      }
+    }
+  }
+
+  void syncUsername();
+
+  return () => {
+    isMounted = false;
+  };
+}, [activeUser]);
+
+useEffect(() => {
+  let isMounted = true;
+
+  async function hydrateCurrentEvent() {
+    const raw = await AsyncStorage.getItem(CURRENT_EVENT_STORAGE_KEY);
+    if (!raw || !isMounted) {
+      return;
+    }
+
+    try {
+      setCurrentEvent(JSON.parse(raw));
+    } catch {
+      await AsyncStorage.removeItem(CURRENT_EVENT_STORAGE_KEY);
+    }
+  }
+
+  void hydrateCurrentEvent();
+
+  return () => {
+    isMounted = false;
+  };
+}, []);
+
+useEffect(() => {
+  async function persistCurrentEvent() {
+    if (currentEvent) {
+      await AsyncStorage.setItem(CURRENT_EVENT_STORAGE_KEY, JSON.stringify(currentEvent));
+      return;
+    }
+
+    await AsyncStorage.removeItem(CURRENT_EVENT_STORAGE_KEY);
+  }
+
+  void persistCurrentEvent();
+}, [currentEvent]);
 
   if (isLoading || isPreparingAccount) {
     return (
@@ -121,7 +157,7 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (!activeUser) {
     return <AuthScreen authError={authError} onAuthenticated={() => clearAuthError()} />;
   }
 
@@ -137,7 +173,7 @@ export default function App() {
       "2. ",
       "3. ",
       "",
-      `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
+      `Signed in as: @${currentUsername || "member"}`,
     ].join("\n");
     const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
@@ -166,7 +202,7 @@ export default function App() {
       "",
       "When would you use it?",
       "",
-      `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
+      `Signed in as: @${currentUsername || "member"}`,
     ].join("\n");
     const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
@@ -186,14 +222,6 @@ export default function App() {
     }
   }
 
-  async function handleOpenWaitlist() {
-    try {
-      await Linking.openURL(EARLY_ACCESS_WAITLIST_URL);
-      setSettingsOpen(false);
-    } catch {
-      Alert.alert("Unable to open link", "Please try again in a moment.");
-    }
-  }
 
   function handleOpenPeopleFilter(status: PersonStatusMode) {
     setPersonStatusMode(status || "all");
@@ -204,7 +232,7 @@ export default function App() {
   async function handleLogout() {
     try {
       await signOutCurrentUser();
-      await signInAsGuest();
+      setCurrentEvent(null);
     } finally {
       setAccountMenuOpen(false);
       setNavMenuOpen(false);
@@ -213,12 +241,6 @@ export default function App() {
 
   function openAccountArea() {
     setNavMenuOpen(false);
-
-    if (isGuest) {
-      setAuthModalOpen(true);
-      return;
-    }
-
     setAccountMenuOpen(true);
   }
 
@@ -266,7 +288,7 @@ export default function App() {
           </View>
           <View style={styles.switcher}>
             <Button
-              label={isGuest ? "Guest" : `@${currentUsername || "member"}`}
+              label={`@${currentUsername || "member"}`}
               onPress={openAccountArea}
               variant="ghost"
               fullWidth={false}
@@ -274,7 +296,7 @@ export default function App() {
               style={styles.switchButton}
             />
             <Button
-              label={currentEvent ? `Current: ${currentEvent.name}` : "Set Current Event"}
+              label={formatCurrentEventChipLabel(currentEvent)}
               onPress={() => setCurrentEventOpen(true)}
               variant="ghost"
               fullWidth={false}
@@ -309,32 +331,10 @@ export default function App() {
         </View>
       )}
 
-      {isGuest ? (
-        <View style={styles.currentEventBar}>
-          <Button
-            label={guestBannerLabel}
-            onPress={() => setAuthModalOpen(true)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-          />
-        </View>
-      ) : null}
-
-      <View style={styles.currentEventBar}>
-        <Button
-          label={updatesBannerLabel}
-          onPress={handleOpenWaitlist}
-          variant="ghost"
-          fullWidth={false}
-          size="compact"
-        />
-      </View>
-
       {currentEvent ? (
         <View style={styles.currentEventBar}>
           <Button
-            label={`Live event: ${currentEvent.name} · ${formatCategoryLabel(currentEvent.category)}`}
+            label={formatCurrentEventChipLabel(currentEvent)}
             onPress={() => setCurrentEventOpen(true)}
             variant="ghost"
             fullWidth={false}
@@ -351,7 +351,13 @@ export default function App() {
       ) : null}
 
       <View style={styles.content}>
-        {screen === "home" ? <HomeScreen currentEvent={currentEvent} onOpenPeopleFilter={handleOpenPeopleFilter} /> : null}
+        {screen === "home" ? (
+          <HomeScreen
+            currentEvent={currentEvent}
+            onOpenPeopleFilter={handleOpenPeopleFilter}
+            onRequestOpenCurrentEvent={() => setCurrentEventOpen(true)}
+          />
+        ) : null}
         {screen === "event" ? <EventScreen currentEvent={currentEvent} /> : null}
         {screen === "person" ? (
           <PersonProfileScreen
@@ -378,8 +384,6 @@ export default function App() {
 
       <Modal visible={isAuthModalOpen} animationType="slide" presentationStyle="pageSheet">
         <AuthScreen
-          canUseGuest={false}
-          guestUserId={isGuest ? user.id : null}
           onAuthenticated={() => {
             setAuthModalOpen(false);
           }}
@@ -431,7 +435,7 @@ export default function App() {
               variant={screen === "person" ? "primary" : "ghost"}
             />
             <Button
-              label={isGuest ? "Guest account" : `Account @${currentUsername || "member"}`}
+              label={`Account @${currentUsername || "member"}`}
               onPress={openAccountArea}
               variant="ghost"
             />
