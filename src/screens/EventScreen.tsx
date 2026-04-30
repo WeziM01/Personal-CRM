@@ -7,10 +7,12 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
+import { FloatingActionBar } from "../components/FloatingActionBar";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -23,10 +25,12 @@ import {
   deleteEvent,
   ensureSessionUserId,
   formatCategoryLabel,
+  formatEventDate,
   getOrCreateEvent,
   listAllInteractions,
   listEventInsights,
   listPeopleInsights,
+  parseDateOnlyString,
   updateEventDetails,
 } from "../lib/crm";
 import { colors, layout } from "../theme/tokens";
@@ -36,6 +40,7 @@ type SortMode = "recent" | "name" | "people" | "notes";
 type EventEditorDraft = {
   name: string;
   category: (typeof EVENT_CATEGORY_OPTIONS)[number]["value"] | "";
+  eventDate: string;
 };
 
 type EventScreenProps = {
@@ -43,6 +48,8 @@ type EventScreenProps = {
 };
 
 export function EventScreen({ currentEvent }: EventScreenProps) {
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 720;
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isEventEditorOpen, setEventEditorOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
@@ -50,7 +57,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
   const [isDeletingEvent, setDeletingEvent] = useState(false);
   const [deleteArmedEventId, setDeleteArmedEventId] = useState<string | null>(null);
   const [eventEditorMode, setEventEditorMode] = useState<"create" | "edit">("create");
-  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "" });
+  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "", eventDate: "" });
   const [captureInitialDraft, setCaptureInitialDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const [captureLockedEvent, setCaptureLockedEvent] = useState<CurrentEventValue | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
@@ -117,6 +124,14 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     });
   }, [interactions, people, selectedCategory, selectedEvent, sortMode]);
 
+  const selectedEventFollowUpSummary = useMemo(() => {
+    return {
+      dueToday: filteredPeople.filter((person) => person.followUpState === "dueToday").length,
+      overdue: filteredPeople.filter((person) => person.followUpState === "overdue").length,
+      upcoming: filteredPeople.filter((person) => person.followUpState === "upcoming").length,
+    };
+  }, [filteredPeople]);
+
   const groupedEvents = useMemo(() => {
     const groups = new Map<string, typeof filteredEvents>();
 
@@ -172,6 +187,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name: currentEvent?.name || "",
       category: currentEvent?.category || "",
+      eventDate: "",
     });
     setEventEditorOpen(true);
   }
@@ -181,6 +197,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name,
       category: currentEvent?.category || "",
+      eventDate: "",
     });
     setEventEditorOpen(true);
   }
@@ -191,7 +208,11 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     }
 
     setEventEditorMode("edit");
-    setEventDraft({ name: selectedEvent.name, category: selectedEvent.category });
+    setEventDraft({
+      name: selectedEvent.name,
+      category: selectedEvent.category,
+      eventDate: selectedEvent.eventDate || "",
+    });
     setEventEditorOpen(true);
   }
 
@@ -221,10 +242,16 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
       return;
     }
 
+    if (eventDraft.eventDate && !parseDateOnlyString(eventDraft.eventDate)) {
+      Alert.alert("Invalid date", "Use YYYY-MM-DD for the event date.");
+      return;
+    }
+
     try {
       setSavingEvent(true);
       const userId = await ensureSessionUserId();
       const category = eventDraft.category && eventDraft.category !== "all" ? eventDraft.category : null;
+      const eventDate = eventDraft.eventDate.trim() || null;
 
       if (eventEditorMode === "edit" && selectedEvent) {
         await updateEventDetails({
@@ -232,9 +259,10 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           eventId: selectedEvent.id,
           name,
           category,
+          eventDate,
         });
       } else {
-        const event = await getOrCreateEvent(userId, name, category);
+        const event = await getOrCreateEvent(userId, name, category, eventDate);
         setSelectedEventId(event.id);
       }
 
@@ -283,7 +311,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     try {
       setSavingEvent(true);
       const userId = await ensureSessionUserId();
-      const event = await getOrCreateEvent(userId, trimmedQuery, null);
+      const event = await getOrCreateEvent(userId, trimmedQuery, null, null);
       setSelectedEventId(event.id);
       setSearchQuery("");
       await loadEventData();
@@ -309,8 +337,12 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         draft.name,
         draft.company,
         draft.linkedinUrl,
+        draft.email,
         draft.phoneNumber,
-        draft.isVip
+        draft.preferredChannel,
+        draft.preferredChannelOther,
+        draft.priority,
+        draft.tags
       );
       let linkedEventId: string | null = null;
       const eventName = currentEvent?.name || draft.event;
@@ -318,7 +350,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
       let linkedEventName = eventName;
 
       if (eventName && eventName !== "No event") {
-        const draftEvent = await getOrCreateEvent(userId, eventName, eventCategory);
+        const draftEvent = await getOrCreateEvent(userId, eventName, eventCategory, null);
         linkedEventId = draftEvent.id;
         linkedEventName = draftEvent.name;
       }
@@ -327,7 +359,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
         userId,
         personId: person.id,
         eventId: linkedEventId,
-        rawNote: buildInteractionRecord(draft.notes, draft.followUp, draft.company),
+        rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
       setCaptureOpen(false);
@@ -348,19 +380,20 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <View style={styles.headerRow}>
+          <View style={[styles.headerRow, isCompactLayout ? styles.headerRowCompact : null]}>
             <View style={styles.headerCopy}>
-              <Typography variant="caption">Events</Typography>
-              <Typography variant="h1">Treat events like first-class records, not just tags on people.</Typography>
+              <Typography variant="h1">Events</Typography>
             </View>
-            <View style={styles.headerActions}>
-              <Button label="Add event" onPress={openCreateEvent} fullWidth={false} variant="ghost" />
-              <Button label="Log event contact" onPress={openGeneralCapture} fullWidth={false} />
-            </View>
+            <Button
+              label="Add event"
+              onPress={openCreateEvent}
+              fullWidth={false}
+              variant="primary"
+              style={styles.addEventButton}
+            />
           </View>
 
           <Card>
-            <Typography variant="caption">Last event</Typography>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
               {EVENT_CATEGORY_OPTIONS.map((option) => (
                 <Button
@@ -405,9 +438,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               />
             </View>
 
-            <Typography variant="caption" style={styles.subSectionLabel}>
-              Search
-            </Typography>
             <TextInput
               placeholder="Search event name"
               placeholderTextColor={colors.textTertiary}
@@ -427,15 +457,19 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
 
           {selectedEvent ? (
             <Card style={styles.featureCard}>
-              <Typography variant="caption">Selected event</Typography>
-              <Typography variant="h1">{selectedEvent.name}</Typography>
-              <Typography variant="body" style={styles.secondaryText}>
-                {formatCategoryLabel(selectedEvent.category)} · {selectedEvent.interactionCount} notes · {selectedEvent.peopleCount} people
+              <Typography variant="h2">{selectedEvent.name}</Typography>
+              <Typography variant="caption" style={styles.secondaryText}>
+                {formatCategoryLabel(selectedEvent.category)}
+                {selectedEvent.eventDate ? ` · ${formatEventDate(selectedEvent.eventDate)}` : ""}
+                {` · ${selectedEvent.interactionCount} notes · ${selectedEvent.peopleCount} people`}
+              </Typography>
+              <Typography variant="caption">
+                Due today {selectedEventFollowUpSummary.dueToday} · Overdue {selectedEventFollowUpSummary.overdue} · Upcoming {selectedEventFollowUpSummary.upcoming}
               </Typography>
               <Typography variant="caption">{selectedEvent.lastConnectedLabel}</Typography>
               <View style={styles.featureActions}>
                 <Button
-                  label="Log contact here"
+                  label="Log contact"
                   onPress={openSelectedEventCapture}
                   fullWidth={false}
                   size="compact"
@@ -454,16 +488,12 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           ) : null}
 
           <View style={styles.sectionHeader}>
-            <Typography variant="caption">Grouped by category</Typography>
-            <Typography variant="body" style={styles.secondaryText}>
-              Tap an event to inspect it, then edit, delete, or log people straight into it.
-            </Typography>
+            <Typography variant="caption">All events</Typography>
           </View>
 
           <View style={styles.peopleStack}>
             {groupedEvents.map((group) => (
               <View key={group.category} style={styles.groupSection}>
-                <Typography variant="h2">{formatCategoryLabel(group.category as never)}</Typography>
                 {group.items.map((event) => (
                   <Pressable key={event.id} onPress={() => setSelectedEventId(event.id)}>
                     <Card
@@ -473,15 +503,15 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                       ]}
                     >
                       <View style={styles.eventHeader}>
-                        <View style={styles.eventCopy}>
-                          <Typography variant="h2">{event.name}</Typography>
-                          <Typography variant="caption">{event.lastConnectedLabel}</Typography>
-                        </View>
-                        <Typography variant="caption">{event.interactionCount} notes</Typography>
+                        <Typography variant="body" style={styles.secondaryText}>
+                          {formatCategoryLabel(event.category as never)}
+                        </Typography>
+                        <Typography variant="caption">
+                          {event.eventDate ? `${formatEventDate(event.eventDate)} · ` : ""}{event.lastConnectedLabel}
+                        </Typography>
                       </View>
-                      <Typography variant="body" style={styles.secondaryText}>
-                        {event.peopleCount} people logged · {event.featuredPeople.join(", ") || "No people yet"}
-                      </Typography>
+                      <Typography variant="h2">{event.name}</Typography>
+                      <Typography variant="caption">{event.interactionCount} notes · {event.peopleCount} people</Typography>
                     </Card>
                   </Pressable>
                 ))}
@@ -505,6 +535,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
             ) : null}
           </View>
 
+
           <View style={styles.sectionHeader}>
             <Typography variant="caption">People linked to this event</Typography>
             <Typography variant="body" style={styles.secondaryText}>
@@ -523,13 +554,14 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                     <Typography variant="caption">
                       {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                     </Typography>
+                    {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                   </View>
                   <Typography variant="caption">{person.bannerLabel}</Typography>
                 </View>
                 <Typography variant="body" style={styles.valueBlock} numberOfLines={2}>
-                  {person.lastInteractionNote}
+                  {person.nextStep || person.whatMatters}
                 </Typography>
-                <Typography variant="caption">Follow up: {person.followUp}</Typography>
+                {person.nextFollowUpAt ? <Typography variant="caption">Follow up: {person.nextFollowUpLabel}</Typography> : null}
               </Card>
             ))}
             {!isLoading && filteredPeople.length === 0 ? (
@@ -552,6 +584,15 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           title="Log Event Contact"
           saveLabel="Save Event Contact"
         />
+
+        {isCompactLayout ? (
+          <FloatingActionBar
+            actions={[
+              { label: "Add event", onPress: openCreateEvent, variant: "ghost" },
+              { label: "Log contact", onPress: openGeneralCapture },
+            ]}
+          />
+        ) : null}
 
         <Modal visible={isEventEditorOpen} animationType="slide" presentationStyle="pageSheet">
           <SafeAreaView style={styles.safeArea}>
@@ -578,6 +619,19 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                   style={styles.searchInput}
                   value={eventDraft.name}
                   onChangeText={(value) => setEventDraft((current) => ({ ...current, name: value }))}
+                />
+
+                <Typography variant="caption" style={styles.subSectionLabel}>
+                  Event date
+                </Typography>
+                <TextInput
+                  placeholder="2026-04-28"
+                  placeholderTextColor={colors.textTertiary}
+                  style={styles.searchInput}
+                  value={eventDraft.eventDate}
+                  onChangeText={(value) => setEventDraft((current) => ({ ...current, eventDate: value }))}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
 
                 <Typography variant="caption" style={styles.subSectionLabel}>
@@ -626,18 +680,23 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
     paddingTop: layout.stackGap,
-    paddingBottom: 48,
+    paddingBottom: 132,
     gap: 18,
   },
   headerRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "flex-start",
     justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: 12,
   },
   headerActions: {
     flexDirection: "row",
     gap: 8,
+    flexWrap: "wrap",
+  },
+  headerRowCompact: {
+    alignItems: "stretch",
   },
   headerCopy: {
     flex: 1,
@@ -741,5 +800,9 @@ const styles = StyleSheet.create({
   footerButtons: {
     gap: 10,
     marginTop: "auto",
+  },
+  addEventButton: {
+    marginLeft: 8,
+    minWidth: 110,
   },
 });

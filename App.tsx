@@ -1,11 +1,12 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
-import { Alert, Linking, Modal, SafeAreaView, StyleSheet, View } from "react-native";
+import { Alert, Linking, Modal, SafeAreaView, Share, StyleSheet, View, useWindowDimensions } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
 import { formatCategoryLabel } from "./src/lib/crm";
-import { getCurrentUsername, signInAsGuest, signOutCurrentUser } from "./src/lib/auth";
+import { ensureProfileForUser, getCurrentUsername, signOutCurrentUser } from "./src/lib/auth";
 import { supabaseConfigMessage } from "./src/lib/supabase";
 import { Button } from "./src/components/ui/Button";
 import { AuthScreen } from "./src/screens/AuthScreen";
@@ -17,19 +18,39 @@ import { colors } from "./src/theme/tokens";
 
 type ScreenKey = "home" | "event" | "person";
 
+const CURRENT_EVENT_STORAGE_KEY = "blackbook.current_event";
+
+function formatCurrentEventChipLabel(event: CurrentEventValue | null) {
+  if (!event) {
+    return "Set Current Event";
+  }
+
+  const typeLabel = event.category === "other" && event.customCategoryLabel?.trim()
+    ? event.customCategoryLabel.trim()
+    : formatCategoryLabel(event.category);
+
+  return event.eventDate?.trim()
+    ? `Current: ${event.name} · ${typeLabel} · ${event.eventDate.trim()}`
+    : `Current: ${event.name} · ${typeLabel}`;
+}
+
 export default function App() {
-  const { user, isLoading } = useAuth();
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 880;
+  const isVeryCompactLayout = width < 520;
+  const { user, isLoading, authError, clearAuthError } = useAuth();
+  const activeUser = user && !user.is_anonymous ? user : null;
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
+  const [isPreparingAccount, setPreparingAccount] = useState(false);
   const [isAuthModalOpen, setAuthModalOpen] = useState(false);
   const [isAccountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [isNavMenuOpen, setNavMenuOpen] = useState(false);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [screen, setScreen] = useState<ScreenKey>("home");
   const [personStatusMode, setPersonStatusMode] = useState<PersonStatusMode>("all");
   const [personStatusNonce, setPersonStatusNonce] = useState(0);
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
-
-  const isGuest = Boolean(user?.is_anonymous);
 
   if (supabaseConfigMessage) {
     return (
@@ -41,7 +62,7 @@ export default function App() {
               {supabaseConfigMessage}
             </Typography>
             <Typography variant="body" style={styles.configText}>
-              Add the same EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY values from your local .env to Vercel Project Settings, then redeploy.
+              Add EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_ANON_KEY, and EXPO_PUBLIC_AUTH_REDIRECT_URL to your local .env and Vercel Project Settings, then redeploy.
             </Typography>
           </View>
         </View>
@@ -49,37 +70,84 @@ export default function App() {
     );
   }
 
-  useEffect(() => {
-    let isMounted = true;
 
-    async function syncUsername() {
-      if (!user || user.is_anonymous) {
-        if (isMounted) {
-          setCurrentUsername(null);
-        }
-        return;
-      }
+useEffect(() => {
+  let isMounted = true;
 
-      try {
-        const username = await getCurrentUsername(user.id);
-        if (isMounted) {
-          setCurrentUsername(username);
-        }
-      } catch {
-        if (isMounted) {
-          setCurrentUsername(null);
-        }
+  async function syncUsername() {
+      if (!activeUser) {
+      if (isMounted) {
+        setPreparingAccount(false);
+        setCurrentUsername(null);
       }
+      return;
     }
 
-    syncUsername();
+    if (isMounted) {
+      setPreparingAccount(true);
+    }
 
-    return () => {
-      isMounted = false;
-    };
-  }, [user]);
+    try {
+      await ensureProfileForUser(activeUser);
+        const username = await getCurrentUsername(activeUser.id);
+      if (isMounted) {
+        setCurrentUsername(username);
+      }
+    } catch {
+      if (isMounted) {
+        setCurrentUsername(null);
+      }
+    } finally {
+      if (isMounted) {
+        setPreparingAccount(false);
+      }
+    }
+  }
 
-  if (isLoading) {
+  void syncUsername();
+
+  return () => {
+    isMounted = false;
+  };
+}, [activeUser]);
+
+useEffect(() => {
+  let isMounted = true;
+
+  async function hydrateCurrentEvent() {
+    const raw = await AsyncStorage.getItem(CURRENT_EVENT_STORAGE_KEY);
+    if (!raw || !isMounted) {
+      return;
+    }
+
+    try {
+      setCurrentEvent(JSON.parse(raw));
+    } catch {
+      await AsyncStorage.removeItem(CURRENT_EVENT_STORAGE_KEY);
+    }
+  }
+
+  void hydrateCurrentEvent();
+
+  return () => {
+    isMounted = false;
+  };
+}, []);
+
+useEffect(() => {
+  async function persistCurrentEvent() {
+    if (currentEvent) {
+      await AsyncStorage.setItem(CURRENT_EVENT_STORAGE_KEY, JSON.stringify(currentEvent));
+      return;
+    }
+
+    await AsyncStorage.removeItem(CURRENT_EVENT_STORAGE_KEY);
+  }
+
+  void persistCurrentEvent();
+}, [currentEvent]);
+
+  if (isLoading || isPreparingAccount) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingWrap}>
@@ -89,53 +157,74 @@ export default function App() {
     );
   }
 
-  if (!user) {
-    return <AuthScreen />;
+  if (!activeUser) {
+    return <AuthScreen authError={authError} onAuthenticated={() => clearAuthError()} />;
   }
 
-  async function handleSupportEmail(type: "bug" | "feature") {
-    const subject = type === "bug" ? "Bug Report - Personal CRM MVP" : "Feature Request - Personal CRM MVP";
-    const body = type === "bug"
-      ? [
-          "What happened?",
-          "",
-          "What did you expect to happen?",
-          "",
-          "Steps to reproduce:",
-          "1. ",
-          "2. ",
-          "3. ",
-          "",
-          `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
-        ].join("\n")
-      : [
-          "What would you like the app to do?",
-          "",
-          "Why would it help?",
-          "",
-          "When would you use it?",
-          "",
-          `Signed in as: ${isGuest ? "Guest" : `@${currentUsername || "member"}`}`,
-        ].join("\n");
-
+  async function handleReportBug() {
+    const subject = "Bug Report - Personal CRM MVP";
+    const body = [
+      "What happened?",
+      "",
+      "What did you expect to happen?",
+      "",
+      "Steps to reproduce:",
+      "1. ",
+      "2. ",
+      "3. ",
+      "",
+      `Signed in as: @${currentUsername || "member"}`,
+    ].join("\n");
     const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
     try {
-      const canOpen = await Linking.canOpenURL(url);
-      if (!canOpen) {
-        Alert.alert("No mail app found", "Set up a mail app on this device to send feedback.");
-        return;
-      }
-
       await Linking.openURL(url);
       setSettingsOpen(false);
     } catch {
-      Alert.alert("Could not open mail", "Please try again after setting a default mail app.");
+      try {
+        await Share.share({
+          title: subject,
+          message: `${subject}\n\n${body}`,
+        });
+        setSettingsOpen(false);
+      } catch {
+        Alert.alert("Could not open bug report", "Please try again in a moment.");
+      }
     }
   }
 
+  async function handleSuggestFeature() {
+    const subject = "Feature Request - Personal CRM MVP";
+    const body = [
+      "What would you like the app to do?",
+      "",
+      "Why would it help?",
+      "",
+      "When would you use it?",
+      "",
+      `Signed in as: @${currentUsername || "member"}`,
+    ].join("\n");
+    const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    try {
+      await Linking.openURL(url);
+      setSettingsOpen(false);
+    } catch {
+      try {
+        await Share.share({
+          title: subject,
+          message: `${subject}\n\n${body}`,
+        });
+        setSettingsOpen(false);
+      } catch {
+        Alert.alert("Could not open feature request", "Please try again in a moment.");
+      }
+    }
+  }
+
+
   function handleOpenPeopleFilter(status: PersonStatusMode) {
-    setPersonStatusMode(status);
+    setPersonStatusMode(status || "all");
     setPersonStatusNonce((value) => value + 1);
     setScreen("person");
   }
@@ -143,92 +232,109 @@ export default function App() {
   async function handleLogout() {
     try {
       await signOutCurrentUser();
-      await signInAsGuest();
+      setCurrentEvent(null);
     } finally {
       setAccountMenuOpen(false);
+      setNavMenuOpen(false);
     }
+  }
+
+  function openAccountArea() {
+    setNavMenuOpen(false);
+    setAccountMenuOpen(true);
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.topBar}>
-        <View>
-          <Button
-            label="Home"
-            onPress={() => setScreen("home")}
-            variant={screen === "home" ? "primary" : "ghost"}
-            fullWidth={false}
-            size="compact"
-            style={styles.switchButton}
-          />
+      {isCompactLayout ? (
+        <View style={[styles.topBar, styles.topBarCompact]}
+        >
+          <View style={styles.compactTopRow}>
+            <View style={styles.compactBrandWrap}>
+              <Typography variant="caption">Blackbook</Typography>
+              <Typography variant="h2">{screen === "home" ? "Home" : screen === "event" ? "Events" : "People"}</Typography>
+            </View>
+            <View style={styles.compactTopActions}>
+              <Button
+                label={currentEvent ? (isVeryCompactLayout ? "Event" : "Current event") : "Set event"}
+                onPress={() => setCurrentEventOpen(true)}
+                variant="ghost"
+                fullWidth={false}
+                size="compact"
+                style={styles.compactHeaderButton}
+              />
+              <Button
+                label="Menu"
+                onPress={() => setNavMenuOpen(true)}
+                variant="ghost"
+                fullWidth={false}
+                size="compact"
+                style={styles.compactHeaderButton}
+              />
+            </View>
+          </View>
         </View>
-        <View style={styles.switcher}>
-          <Button
-            label={isGuest ? "Guest" : `@${currentUsername || "member"}`}
-            onPress={() => {
-              if (isGuest) {
-                setAuthModalOpen(true);
-                return;
-              }
-
-              setAccountMenuOpen(true);
-            }}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-            style={styles.switchButton}
-          />
-          <Button
-            label={currentEvent ? `Current: ${currentEvent.name}` : "Set Current Event"}
-            onPress={() => setCurrentEventOpen(true)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-            style={styles.currentEventButton}
-          />
-          <Button
-            label="Events"
-            onPress={() => setScreen("event")}
-            variant={screen === "event" ? "primary" : "ghost"}
-            fullWidth={false}
-            size="compact"
-            style={styles.switchButton}
-          />
-          <Button
-            label="People"
-            onPress={() => setScreen("person")}
-            variant={screen === "person" ? "primary" : "ghost"}
-            fullWidth={false}
-            size="compact"
-            style={styles.switchButton}
-          />
-          <Button
-            label="⚙️"
-            onPress={() => setSettingsOpen(true)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-            style={styles.switchButton}
-          />
+      ) : (
+        <View style={styles.topBar}>
+          <View>
+            <Button
+              label="Home"
+              onPress={() => setScreen("home")}
+              variant={screen === "home" ? "primary" : "ghost"}
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+          </View>
+          <View style={styles.switcher}>
+            <Button
+              label={`@${currentUsername || "member"}`}
+              onPress={openAccountArea}
+              variant="ghost"
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+            <Button
+              label={formatCurrentEventChipLabel(currentEvent)}
+              onPress={() => setCurrentEventOpen(true)}
+              variant="ghost"
+              fullWidth={false}
+              size="compact"
+              style={styles.currentEventButton}
+            />
+            <Button
+              label="Events"
+              onPress={() => setScreen("event")}
+              variant={screen === "event" ? "primary" : "ghost"}
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+            <Button
+              label="People"
+              onPress={() => setScreen("person")}
+              variant={screen === "person" ? "primary" : "ghost"}
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+            <Button
+              label="Settings"
+              onPress={() => setSettingsOpen(true)}
+              variant="ghost"
+              fullWidth={false}
+              size="compact"
+              style={styles.switchButton}
+            />
+          </View>
         </View>
-      </View>
-
-      {isGuest ? (
-        <View style={styles.currentEventBar}>
-          <Button
-            label="Guest mode: data is temporary unless you create an account"
-            onPress={() => setAuthModalOpen(true)}
-            variant="ghost"
-            fullWidth={false}
-            size="compact"
-          />
-        </View>
-      ) : null}
+      )}
 
       {currentEvent ? (
         <View style={styles.currentEventBar}>
           <Button
-            label={`Live event: ${currentEvent.name} · ${formatCategoryLabel(currentEvent.category)}`}
+            label={formatCurrentEventChipLabel(currentEvent)}
             onPress={() => setCurrentEventOpen(true)}
             variant="ghost"
             fullWidth={false}
@@ -245,7 +351,13 @@ export default function App() {
       ) : null}
 
       <View style={styles.content}>
-        {screen === "home" ? <HomeScreen currentEvent={currentEvent} onOpenPeopleFilter={handleOpenPeopleFilter} /> : null}
+        {screen === "home" ? (
+          <HomeScreen
+            currentEvent={currentEvent}
+            onOpenPeopleFilter={handleOpenPeopleFilter}
+            onRequestOpenCurrentEvent={() => setCurrentEventOpen(true)}
+          />
+        ) : null}
         {screen === "event" ? <EventScreen currentEvent={currentEvent} /> : null}
         {screen === "person" ? (
           <PersonProfileScreen
@@ -272,8 +384,6 @@ export default function App() {
 
       <Modal visible={isAuthModalOpen} animationType="slide" presentationStyle="pageSheet">
         <AuthScreen
-          canUseGuest={false}
-          guestUserId={isGuest ? user.id : null}
           onAuthenticated={() => {
             setAuthModalOpen(false);
           }}
@@ -296,6 +406,52 @@ export default function App() {
         </View>
       </Modal>
 
+      <Modal visible={isNavMenuOpen} transparent animationType="fade" onRequestClose={() => setNavMenuOpen(false)}>
+        <View style={styles.accountMenuOverlay}>
+          <View style={styles.accountMenuCard}>
+            <Typography variant="caption">Navigate</Typography>
+            <Button
+              label="Home"
+              onPress={() => {
+                setScreen("home");
+                setNavMenuOpen(false);
+              }}
+              variant={screen === "home" ? "primary" : "ghost"}
+            />
+            <Button
+              label="Events"
+              onPress={() => {
+                setScreen("event");
+                setNavMenuOpen(false);
+              }}
+              variant={screen === "event" ? "primary" : "ghost"}
+            />
+            <Button
+              label="People"
+              onPress={() => {
+                setScreen("person");
+                setNavMenuOpen(false);
+              }}
+              variant={screen === "person" ? "primary" : "ghost"}
+            />
+            <Button
+              label={`Account @${currentUsername || "member"}`}
+              onPress={openAccountArea}
+              variant="ghost"
+            />
+            <Button
+              label="Settings"
+              onPress={() => {
+                setNavMenuOpen(false);
+                setSettingsOpen(true);
+              }}
+              variant="ghost"
+            />
+            <Button label="Close" onPress={() => setNavMenuOpen(false)} variant="ghost" />
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={isSettingsOpen} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView style={styles.safeArea}>
           <View style={styles.settingsContainer}>
@@ -307,8 +463,8 @@ export default function App() {
             </View>
 
             <View style={styles.settingsActions}>
-              <Button label="🐛 Report a Bug" onPress={() => handleSupportEmail("bug")} />
-              <Button label="💡 Suggest a Feature" onPress={() => handleSupportEmail("feature")} variant="ghost" />
+              <Button label="Report a bug" onPress={handleReportBug} />
+              <Button label="Suggest a feature" onPress={handleSuggestFeature} variant="ghost" />
             </View>
           </View>
         </SafeAreaView>
@@ -328,6 +484,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
+  switcherCompact: {
+    flexWrap: "wrap",
+  },
+  compactTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  compactBrandWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  compactTopActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexShrink: 0,
+  },
+  compactHeaderButton: {
+    minHeight: 38,
+  },
   topBar: {
     paddingHorizontal: 16,
     paddingTop: 12,
@@ -336,6 +513,11 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     gap: 12,
+  },
+  topBarCompact: {
+    alignItems: "stretch",
+    flexDirection: "column",
+    gap: 0,
   },
   currentEventButton: {
     maxWidth: 170,
@@ -349,6 +531,9 @@ const styles = StyleSheet.create({
   },
   switchButton: {
     minHeight: 40,
+  },
+  switchButtonCompact: {
+    maxWidth: "100%",
   },
   content: {
     flex: 1,

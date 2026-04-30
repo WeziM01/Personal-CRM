@@ -7,13 +7,19 @@ export type PersonRow = {
   id: string;
   is_vip: boolean;
   linkedin_url: string | null;
+  email: string | null;
   name: string | null;
   phone_number: string | null;
+  priority: PersonPriority;
+  preferred_channel: PreferredChannel | null;
+  preferred_channel_other: string | null;
+  tags: string[];
   created_at: string;
 };
 
 export type EventRow = {
   category: EventCategory | null;
+  event_date: string | null;
   id: string;
   name: string;
   created_at: string;
@@ -40,18 +46,31 @@ export type EventCategory =
   | "community"
   | "other";
 
+export type PersonPriority = "high" | "medium" | "low";
+export type FollowUpPreset = "tomorrow" | "in3days" | "nextWeek" | "custom";
+export type PreferredChannel = "linkedin" | "whatsapp" | "email" | "phone" | "other";
+
 export type PersonInsight = {
   id: string;
   name: string;
-  isVip: boolean;
+  priority: PersonPriority;
   company: string;
   linkedinUrl: string;
+  email: string;
   phoneNumber: string;
+  preferredChannel: PreferredChannel | "";
+  preferredChannelOther: string;
+  tags: string[];
   createdAt: string;
   interactionCount: number;
   lastInteractionId: string | null;
   lastInteractionAt: string | null;
   lastInteractionNote: string;
+  whatMatters: string;
+  nextStep: string;
+  nextFollowUpAt: string | null;
+  nextFollowUpLabel: string;
+  followUpState: "none" | "upcoming" | "dueToday" | "overdue";
   lastEventName: string | null;
   lastEventCategory: EventCategory;
   followUp: string;
@@ -64,6 +83,7 @@ export type EventInsight = {
   id: string;
   name: string;
   createdAt: string;
+  eventDate: string | null;
   category: EventCategory;
   interactionCount: number;
   peopleCount: number;
@@ -72,25 +92,154 @@ export type EventInsight = {
   featuredPeople: string[];
 };
 
-// Demo toggle: set to false to return to day-based reminder timing.
-export const FAST_REMINDER_DEMO_MODE = true;
+// Keep real day-based reminder timing in the app; demo timing causes status changes within seconds.
+export const FAST_REMINDER_DEMO_MODE = false;
 export const STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 45 : 14;
 export const RECENT_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
 export const JUST_CONNECTED_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 10 : 0;
-export const VIP_STALE_CONTACT_THRESHOLD = FAST_REMINDER_DEMO_MODE ? 20 : 7;
+
+export const PERSON_TAG_SUGGESTIONS = [
+  "investor",
+  "founder",
+  "corporate",
+  "charity",
+  "operator",
+  "advisor",
+  "creator",
+  "community",
+] as const;
 
 export const EVENT_CATEGORY_OPTIONS: Array<{ label: string; value: EventCategory | "all" }> = [
   { label: "All", value: "all" },
-  { label: "🤝 Networking", value: "networking" },
-  { label: "🎤 Conference", value: "conference" },
-  { label: "☕ Coffee", value: "coffee" },
-  { label: "💻 Zoom", value: "zoom" },
-  { label: "🍻 Drinks", value: "social" },
+  { label: "Networking", value: "networking" },
+  { label: "Conference", value: "conference" },
+  { label: "Coffee", value: "coffee" },
+  { label: "Zoom", value: "zoom" },
+  { label: "Drinks", value: "social" },
   { label: "Investor", value: "investor" },
   { label: "Workshop", value: "workshop" },
   { label: "Community", value: "community" },
   { label: "Other", value: "other" },
 ];
+
+function startOfDay(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+export function toDateOnlyString(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function parseDateOnlyString(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+export function getSuggestedFollowUpPreset(category?: EventCategory | "" | null): FollowUpPreset {
+  if (category === "networking" || category === "conference" || category === "investor") {
+    return "tomorrow";
+  }
+
+  if (category === "coffee") {
+    return "in3days";
+  }
+
+  if (category === "workshop" || category === "community") {
+    return "nextWeek";
+  }
+
+  return "in3days";
+}
+
+export function getPresetDate(preset: FollowUpPreset, baseDate = new Date()) {
+  const seed = startOfDay(baseDate);
+  const next = new Date(seed);
+
+  if (preset === "tomorrow") {
+    next.setDate(next.getDate() + 1);
+    return toDateOnlyString(next);
+  }
+
+  if (preset === "in3days") {
+    next.setDate(next.getDate() + 3);
+    return toDateOnlyString(next);
+  }
+
+  if (preset === "nextWeek") {
+    next.setDate(next.getDate() + 7);
+    return toDateOnlyString(next);
+  }
+
+  return toDateOnlyString(next);
+}
+
+export function formatFollowUpDate(value?: string | null) {
+  const parsed = parseDateOnlyString(value);
+  if (!parsed) {
+    return "No follow-up date";
+  }
+
+  return parsed.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function normalizeEventDate(value?: string | null) {
+  const trimmed = value?.trim() || "";
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = parseDateOnlyString(trimmed);
+  return parsed ? toDateOnlyString(parsed) : null;
+}
+
+export function formatEventDate(value?: string | null) {
+  const parsed = parseDateOnlyString(value);
+  if (!parsed) {
+    return "No date set";
+  }
+
+  return parsed.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function getFollowUpState(nextFollowUpAt?: string | null): PersonInsight["followUpState"] {
+  const parsed = parseDateOnlyString(nextFollowUpAt);
+  if (!parsed) {
+    return "none";
+  }
+
+  const target = startOfDay(parsed).getTime();
+  const today = startOfDay().getTime();
+
+  if (target < today) {
+    return "overdue";
+  }
+
+  if (target === today) {
+    return "dueToday";
+  }
+
+  return "upcoming";
+}
+
 
 const eventCategoryMatchers: Array<{ category: EventCategory; patterns: RegExp[] }> = [
   {
@@ -141,6 +290,59 @@ function assertNoError(error: PostgrestError | null) {
   }
 }
 
+export function normalizePriority(priority?: string | null, isVip?: boolean) {
+  if (priority === "high" || priority === "medium" || priority === "low") {
+    return priority;
+  }
+
+  return isVip ? "high" : "medium";
+}
+
+export function normalizeTags(tags?: string[] | null) {
+  if (!tags?.length) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      tags
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+}
+
+export function normalizePreferredChannel(channel?: string | null): PreferredChannel | null {
+  if (
+    channel === "linkedin" ||
+    channel === "whatsapp" ||
+    channel === "email" ||
+    channel === "phone" ||
+    channel === "other"
+  ) {
+    return channel;
+  }
+
+  return null;
+}
+
+export function normalizePreferredChannelOther(value?: string | null) {
+  const trimmed = value?.trim() || "";
+  return trimmed || null;
+}
+
+export function formatPreferredChannelLabel(
+  channel?: PreferredChannel | "" | null,
+  otherValue?: string | null
+) {
+  if (channel === "linkedin") return "LinkedIn";
+  if (channel === "whatsapp") return "WhatsApp";
+  if (channel === "email") return "Email";
+  if (channel === "phone") return "Phone";
+  if (channel === "other") return otherValue?.trim() || "Other";
+  return "No preference";
+}
+
 export async function ensureSessionUserId() {
   const client = assertClient();
 
@@ -157,27 +359,39 @@ export async function ensureSessionUserId() {
   return data.user.id;
 }
 
-export async function getOrCreateEvent(userId: string, name: string, category?: EventCategory | null) {
+export async function getOrCreateEvent(
+  userId: string,
+  name: string,
+  category?: EventCategory | null,
+  eventDate?: string | null
+) {
   const client = assertClient();
   const normalizedName = name.trim();
   const normalizedCategory = category || inferEventCategory(normalizedName, "");
+  const normalizedEventDate = normalizeEventDate(eventDate);
 
   const { data: existing, error: findError } = await client
     .from("events")
-    .select("id,name,category,created_at")
+    .select("id,name,category,event_date,created_at")
     .eq("user_id", userId)
     .ilike("name", normalizedName)
     .maybeSingle();
 
   assertNoError(findError);
   if (existing) {
-    if (normalizedCategory && existing.category !== normalizedCategory) {
+    const needsCategoryUpdate = normalizedCategory && existing.category !== normalizedCategory;
+    const needsDateUpdate = (existing.event_date || null) !== normalizedEventDate;
+
+    if (needsCategoryUpdate || needsDateUpdate) {
       const { data: updated, error: updateError } = await client
         .from("events")
-        .update({ category: normalizedCategory })
+        .update({
+          category: normalizedCategory,
+          event_date: normalizedEventDate,
+        })
         .eq("user_id", userId)
         .eq("id", existing.id)
-        .select("id,name,category,created_at")
+        .select("id,name,category,event_date,created_at")
         .single();
 
       assertNoError(updateError);
@@ -189,8 +403,13 @@ export async function getOrCreateEvent(userId: string, name: string, category?: 
 
   const { data: inserted, error: insertError } = await client
     .from("events")
-    .insert({ user_id: userId, name: normalizedName, category: normalizedCategory })
-    .select("id,name,category,created_at")
+    .insert({
+      user_id: userId,
+      name: normalizedName,
+      category: normalizedCategory,
+      event_date: normalizedEventDate,
+    })
+    .select("id,name,category,event_date,created_at")
     .single();
 
   assertNoError(insertError);
@@ -202,10 +421,15 @@ export async function createPerson(
   name: string,
   company?: string,
   linkedinUrl?: string,
+  email?: string,
   phoneNumber?: string,
-  isVip = false
+  preferredChannel?: PreferredChannel | "",
+  preferredChannelOther?: string,
+  priority: PersonPriority = "medium",
+  tags: string[] = []
 ) {
   const client = assertClient();
+  const normalizedTags = normalizeTags(tags);
 
   const { data, error } = await client
     .from("persons")
@@ -213,11 +437,16 @@ export async function createPerson(
       user_id: userId,
       name: name.trim() || null,
       company: company?.trim() || null,
-      is_vip: isVip,
+      is_vip: priority === "high",
       linkedin_url: normalizeLinkedInUrl(linkedinUrl),
+      email: normalizeEmail(email),
       phone_number: normalizePhoneNumber(phoneNumber),
+      preferred_channel: normalizePreferredChannel(preferredChannel),
+      preferred_channel_other: normalizePreferredChannelOther(preferredChannelOther),
+      priority,
+      tags: normalizedTags,
     })
-    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,preferred_channel,preferred_channel_other,priority,tags,created_at")
     .single();
 
   assertNoError(error);
@@ -248,19 +477,30 @@ export async function updatePersonDetails(input: {
   name: string;
   company?: string;
   linkedinUrl?: string;
+  email?: string;
   phoneNumber?: string;
-  isVip?: boolean;
+  preferredChannel?: PreferredChannel | "";
+  preferredChannelOther?: string;
+  priority?: PersonPriority;
+  tags?: string[];
 }) {
   const client = assertClient();
+  const normalizedPriority = input.priority || "medium";
+  const normalizedTags = normalizeTags(input.tags);
 
   const { error } = await client
     .from("persons")
     .update({
       name: input.name.trim() || null,
       company: input.company?.trim() || null,
-      is_vip: input.isVip,
+      is_vip: normalizedPriority === "high",
       linkedin_url: normalizeLinkedInUrl(input.linkedinUrl),
+      email: normalizeEmail(input.email),
       phone_number: normalizePhoneNumber(input.phoneNumber),
+      preferred_channel: normalizePreferredChannel(input.preferredChannel),
+      preferred_channel_other: normalizePreferredChannelOther(input.preferredChannelOther),
+      priority: normalizedPriority,
+      tags: normalizedTags,
     })
     .eq("user_id", input.userId)
     .eq("id", input.personId);
@@ -293,6 +533,7 @@ export async function updateEventDetails(input: {
   eventId: string;
   name: string;
   category?: EventCategory | null;
+  eventDate?: string | null;
 }) {
   const client = assertClient();
   const normalizedName = input.name.trim();
@@ -306,6 +547,7 @@ export async function updateEventDetails(input: {
     .update({
       name: normalizedName,
       category: input.category || inferEventCategory(normalizedName, ""),
+      event_date: normalizeEventDate(input.eventDate),
     })
     .eq("user_id", input.userId)
     .eq("id", input.eventId);
@@ -327,6 +569,14 @@ export async function deleteEvent(userId: string, eventId: string) {
 
 export async function deletePerson(userId: string, personId: string) {
   const client = assertClient();
+
+  const { error: interactionError } = await client
+    .from("interactions")
+    .delete()
+    .eq("user_id", userId)
+    .eq("person_id", personId);
+
+  assertNoError(interactionError);
 
   const { error } = await client
     .from("persons")
@@ -350,7 +600,7 @@ export async function listRecentPeople(userId: string, limit = 8) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,preferred_channel,preferred_channel_other,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -364,7 +614,7 @@ export async function listRecentEvents(userId: string, limit = 5) {
 
   const { data, error } = await client
     .from("events")
-    .select("id,name,category,created_at")
+    .select("id,name,category,event_date,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -426,7 +676,7 @@ export async function getFirstPerson(userId: string) {
 
   const { data, error } = await client
     .from("persons")
-    .select("id,name,company,is_vip,linkedin_url,phone_number,created_at")
+    .select("id,name,company,is_vip,linkedin_url,email,phone_number,preferred_channel,preferred_channel_other,priority,tags,created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -455,29 +705,44 @@ export async function listPeopleInsights(userId: string) {
     const daysSinceLastContact = lastInteraction
       ? getDaysSince(lastInteraction.created_at)
       : null;
+    const priority = normalizePriority(person.priority, person.is_vip);
+    const tags = normalizeTags(person.tags);
+    const rawNote = lastInteraction?.raw_note || "";
+    const whatMatters = extractPrimaryNote(rawNote) || "No interactions yet.";
+    const nextStep = extractNextStep(rawNote);
+    const nextFollowUpAt = extractFollowUpDate(rawNote);
 
     return {
       id: person.id,
       name: person.name || "Unknown contact",
-      isVip: Boolean(person.is_vip),
-      company: person.company || extractCompany(lastInteraction?.raw_note || ""),
+      priority,
+      company: person.company || extractCompany(rawNote),
       linkedinUrl: person.linkedin_url || "",
+      email: person.email || "",
       phoneNumber: person.phone_number || "",
+      preferredChannel: normalizePreferredChannel(person.preferred_channel) || "",
+      preferredChannelOther: person.preferred_channel_other || "",
+      tags,
       createdAt: person.created_at,
       interactionCount: personInteractions.length,
       lastInteractionId: lastInteraction?.id || null,
       lastInteractionAt: lastInteraction?.created_at || null,
-      lastInteractionNote: extractPrimaryNote(lastInteraction?.raw_note || "") || "No interactions yet.",
+      lastInteractionNote: whatMatters,
+      whatMatters,
+      nextStep,
+      nextFollowUpAt,
+      nextFollowUpLabel: nextFollowUpAt ? formatFollowUpDate(nextFollowUpAt) : "No follow-up date",
+      followUpState: getFollowUpState(nextFollowUpAt),
       lastEventName: lastInteraction?.events?.name || null,
       lastEventCategory: inferEventCategory(
         lastInteraction?.events?.name,
-        lastInteraction?.raw_note,
+        rawNote,
         lastInteraction?.events?.category || null
       ),
-      followUp: extractFollowUp(lastInteraction?.raw_note || ""),
+      followUp: nextStep || "No next step yet",
       daysSinceLastContact,
-      statusLabel: buildContactStatus(daysSinceLastContact, Boolean(person.is_vip)),
-      bannerLabel: buildContactBanner(daysSinceLastContact, Boolean(person.is_vip)),
+      statusLabel: buildContactStatus(daysSinceLastContact, priority, nextFollowUpAt),
+      bannerLabel: buildContactBanner(daysSinceLastContact, priority, nextFollowUpAt),
     } as PersonInsight;
   });
 }
@@ -514,6 +779,7 @@ export async function listEventInsights(userId: string) {
       id: event.id,
       name: event.name,
       createdAt: event.created_at,
+      eventDate: event.event_date || null,
       category: inferEventCategory(event.name, lastInteraction?.raw_note, event.category),
       interactionCount: eventInteractions.length,
       peopleCount: peopleNames.length,
@@ -539,10 +805,8 @@ export async function countInteractionsByEvent(userId: string, eventId: string) 
   return count || 0;
 }
 
-export function buildInteractionNote(notes: string, followUp: string) {
-  const base = notes.trim();
-  const hasFollowUp = followUp.trim() && followUp.trim().toLowerCase() !== "none yet";
-  return hasFollowUp ? `${base}\nFollow up: ${followUp.trim()}` : base;
+export function buildInteractionNote(whatMatters: string, nextStep: string, nextFollowUpAt?: string) {
+  return buildInteractionRecord(whatMatters, nextStep, undefined, nextFollowUpAt);
 }
 
 export function normalizeLinkedInUrl(value?: string | null) {
@@ -562,6 +826,15 @@ export function normalizeLinkedInUrl(value?: string | null) {
   return `https://www.linkedin.com/in/${trimmed.replace(/^@/, "")}`;
 }
 
+export function normalizeEmail(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.toLowerCase();
+}
+
 export function normalizePhoneNumber(value?: string | null) {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -577,15 +850,19 @@ export function toWhatsAppUrl(phoneNumber: string) {
   return normalized ? `https://wa.me/${normalized}` : null;
 }
 
-export function buildInteractionRecord(notes: string, followUp: string, company?: string) {
+export function buildInteractionRecord(whatMatters: string, nextStep: string, company?: string, nextFollowUpAt?: string) {
   const lines: string[] = [];
 
-  if (notes.trim()) {
-    lines.push(notes.trim());
+  if (whatMatters.trim()) {
+    lines.push(whatMatters.trim());
   }
 
-  if (followUp.trim() && followUp.trim().toLowerCase() !== "none yet") {
-    lines.push(`Follow up: ${followUp.trim()}`);
+  if (nextStep.trim() && nextStep.trim().toLowerCase() !== "none yet") {
+    lines.push(`Next step: ${nextStep.trim()}`);
+  }
+
+  if (nextFollowUpAt?.trim()) {
+    lines.push(`Follow up date: ${nextFollowUpAt.trim()}`);
   }
 
   return lines.join("\n");
@@ -596,20 +873,40 @@ export function extractCompany(rawNote: string) {
   return match?.[1]?.trim() || "";
 }
 
-export function extractPrimaryNote(rawNote: string) {
+function stripInteractionMetadata(rawNote: string) {
   return rawNote
-    .replace(/^Company:\s*.+$/im, "")
-    .replace(/^Follow up:\s*.+$/im, "")
+    .replace(/^Company:\s*.+$/gim, "")
+    .replace(/^Next\s*step:\s*.+$/gim, "")
+    .replace(/^Follow\s*up\s*date:\s*.+$/gim, "")
+    .replace(/^Follow\s*up:\s*.+$/gim, "")
     .trim();
 }
 
-export function extractFollowUp(rawNote: string) {
-  const match = rawNote.match(/follow\s*up\s*[:.-]\s*(.+)$/im);
-  if (!match?.[1]) {
-    return "None yet";
+export function extractPrimaryNote(rawNote: string) {
+  return stripInteractionMetadata(rawNote);
+}
+
+export function extractNextStep(rawNote: string) {
+  const nextStepMatch = rawNote.match(/^Next\s*step:\s*(.+)$/im);
+  if (nextStepMatch?.[1]) {
+    return nextStepMatch[1].trim();
   }
 
-  return match[1].trim();
+  const legacyMatch = rawNote.match(/follow\s*up\s*[:.-]\s*(.+)$/im);
+  if (legacyMatch?.[1]) {
+    return legacyMatch[1].trim();
+  }
+
+  return "";
+}
+
+export function extractFollowUp(rawNote: string) {
+  return extractNextStep(rawNote) || "None yet";
+}
+
+export function extractFollowUpDate(rawNote: string) {
+  const match = rawNote.match(/^Follow\s*up\s*date:\s*(\d{4}-\d{2}-\d{2})$/im);
+  return match?.[1] || null;
 }
 
 export function inferEventCategory(
@@ -657,7 +954,20 @@ export function getDaysSince(value: string) {
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
 }
 
-export function buildContactStatus(daysSinceLastContact: number | null, isVip = false) {
+export function buildContactStatus(
+  daysSinceLastContact: number | null,
+  priority: PersonPriority = "medium",
+  nextFollowUpAt?: string | null
+) {
+  const followUpState = getFollowUpState(nextFollowUpAt);
+  if (followUpState === "overdue") {
+    return "Overdue";
+  }
+
+  if (followUpState === "dueToday") {
+    return "Due today";
+  }
+
   if (daysSinceLastContact === null) {
     return "No contact yet";
   }
@@ -670,14 +980,31 @@ export function buildContactStatus(daysSinceLastContact: number | null, isVip = 
     return "Recently connected";
   }
 
-  if (daysSinceLastContact <= getStaleThreshold(isVip)) {
+  if (!isContactStale(daysSinceLastContact, priority)) {
     return "Cooling";
   }
 
   return "Needs follow-up";
 }
 
-export function buildContactBanner(daysSinceLastContact: number | null, isVip = false) {
+export function buildContactBanner(
+  daysSinceLastContact: number | null,
+  priority: PersonPriority = "medium",
+  nextFollowUpAt?: string | null
+) {
+  const followUpState = getFollowUpState(nextFollowUpAt);
+  if (followUpState === "overdue") {
+    return `Follow-up overdue since ${formatFollowUpDate(nextFollowUpAt)}`;
+  }
+
+  if (followUpState === "dueToday") {
+    return `Follow up today · ${formatFollowUpDate(nextFollowUpAt)}`;
+  }
+
+  if (followUpState === "upcoming") {
+    return `Follow up on ${formatFollowUpDate(nextFollowUpAt)}`;
+  }
+
   if (daysSinceLastContact === null) {
     return "No contact on record yet";
   }
@@ -691,8 +1018,8 @@ export function buildContactBanner(daysSinceLastContact: number | null, isVip = 
       return "Last connected 1 second ago";
     }
 
-    if (daysSinceLastContact >= getStaleThreshold(isVip)) {
-      return `Priority nudge: ${daysSinceLastContact}s since contact`;
+    if (isContactStale(daysSinceLastContact, priority)) {
+      return `Needs a nudge: ${daysSinceLastContact}s since contact`;
     }
 
     return `Haven't connected in ${daysSinceLastContact} seconds`;
@@ -702,23 +1029,32 @@ export function buildContactBanner(daysSinceLastContact: number | null, isVip = 
     return "Last connected 1 day ago";
   }
 
-  if (daysSinceLastContact >= getStaleThreshold(isVip)) {
-    return `Priority nudge: ${daysSinceLastContact} days since contact`;
+  if (isContactStale(daysSinceLastContact, priority)) {
+    return `Needs a nudge: ${daysSinceLastContact} days since contact`;
   }
 
   return `Haven't connected in ${daysSinceLastContact} days`;
 }
 
-export function getStaleThreshold(isVip: boolean) {
-  return isVip ? VIP_STALE_CONTACT_THRESHOLD : STALE_CONTACT_THRESHOLD;
+export function getStaleThreshold(priority: PersonPriority) {
+  return STALE_CONTACT_THRESHOLD;
 }
 
-export function isContactStale(daysSinceLastContact: number | null, isVip: boolean) {
+export function isContactStale(daysSinceLastContact: number | null, priority: PersonPriority) {
   if (daysSinceLastContact === null) {
     return false;
   }
 
-  return daysSinceLastContact >= getStaleThreshold(isVip);
+  const threshold = getStaleThreshold(priority);
+  if (threshold === null) {
+    return false;
+  }
+
+  return daysSinceLastContact >= threshold;
+}
+
+export function formatPriorityLabel(priority: PersonPriority) {
+  return "Tracked contact";
 }
 
 export function buildReconnectDraft(input: {

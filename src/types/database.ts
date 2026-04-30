@@ -39,6 +39,7 @@ export type Database = {
 				Row: {
 						category: string | null;
 					created_at: string;
+					event_date: string | null;
 					id: string;
 					name: string;
 					user_id: string;
@@ -46,6 +47,7 @@ export type Database = {
 				Insert: {
 						category?: string | null;
 					created_at?: string;
+					event_date?: string | null;
 					id?: string;
 					name: string;
 					user_id: string;
@@ -53,6 +55,7 @@ export type Database = {
 				Update: {
 						category?: string | null;
 					created_at?: string;
+					event_date?: string | null;
 					id?: string;
 					name?: string;
 					user_id?: string;
@@ -70,35 +73,50 @@ export type Database = {
 			persons: {
 				Row: {
 						company: string | null;
+						email: string | null;
 					created_at: string;
 					id: string;
 					is_vip: boolean;
 						linkedin_url: string | null;
 					name: string | null;
+					preferred_channel: string | null;
+					preferred_channel_other: string | null;
+					priority: string;
 						phone_number: string | null;
 					photo_url: string | null;
+					tags: string[];
 					user_id: string;
 				};
 				Insert: {
 						company?: string | null;
+						email?: string | null;
 					created_at?: string;
 					id?: string;
 					is_vip?: boolean;
 						linkedin_url?: string | null;
 					name?: string | null;
+					preferred_channel?: string | null;
+					preferred_channel_other?: string | null;
+					priority?: string;
 						phone_number?: string | null;
 					photo_url?: string | null;
+					tags?: string[];
 					user_id: string;
 				};
 				Update: {
 						company?: string | null;
+						email?: string | null;
 					created_at?: string;
 					id?: string;
 					is_vip?: boolean;
 						linkedin_url?: string | null;
 					name?: string | null;
+					preferred_channel?: string | null;
+					preferred_channel_other?: string | null;
+					priority?: string;
 						phone_number?: string | null;
 					photo_url?: string | null;
+					tags?: string[];
 					user_id?: string;
 				};
 				Relationships: [

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
@@ -19,17 +20,21 @@ import {
   listEventInsights,
   listPeopleInsights,
 } from "../lib/crm";
-import { colors, layout } from "../theme/tokens";
+import { colors, layout, radius } from "../theme/tokens";
 import { PersonStatusMode } from "./PersonProfileScreen";
 
 type HomeScreenProps = {
   currentEvent: CurrentEventValue | null;
   onOpenPeopleFilter?: (status: PersonStatusMode) => void;
+  onRequestOpenCurrentEvent?: () => void;
 };
 
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
-export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps) {
+const EVENT_ONBOARDING_KEY = "blackbook.onboarding.event";
+const CAPTURE_ONBOARDING_KEY = "blackbook.onboarding.capture";
+
+export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurrentEvent }: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
@@ -37,14 +42,29 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
+  const [showEventOnboarding, setShowEventOnboarding] = useState(false);
+  const [showCaptureOnboarding, setShowCaptureOnboarding] = useState(false);
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
-  const followUpPeople = useMemo(
-    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip)).slice(0, 4),
+  const dueTodayPeople = useMemo(
+    () => people.filter((person) => person.followUpState === "dueToday").slice(0, 4),
     [people]
   );
+  const overduePeople = useMemo(
+    () => people.filter((person) => person.followUpState === "overdue").slice(0, 4),
+    [people]
+  );
+  const followUpPeople = useMemo(
+    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).slice(0, 4),
+    [people]
+  );
+  const waitingOnYouCount = dueTodayPeople.length + overduePeople.length;
   const contactedTodayPeople = useMemo(
     () => people.filter((person) => (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD),
+    [people]
+  );
+  const nudgeCount = useMemo(
+    () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).length,
     [people]
   );
   const signalPeople = useMemo(() => {
@@ -57,7 +77,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     }
 
     if (activeSignal === "needNudge") {
-      return people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip));
+      return people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority));
     }
 
     return recentPeople;
@@ -66,10 +86,22 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     activeSignal === "tracked"
       ? "People tracked"
       : activeSignal === "contactedToday"
-        ? "Contacted today"
+        ? "Reached out today"
         : activeSignal === "needNudge"
           ? "People who need a nudge"
           : "Recently connected";
+  const currentEventSummary = useMemo(() => {
+    if (!currentEvent) {
+      return null;
+    }
+
+    const linkedPeople = people.filter((person) => person.lastEventName === currentEvent.name);
+    return {
+      total: linkedPeople.length,
+      outstanding: linkedPeople.filter((person) => person.followUpState === "dueToday" || person.followUpState === "overdue").length,
+    };
+  }, [currentEvent, people]);
+
   const eventPulse = useMemo(() => {
     const counts = new Map<string, number>();
     events.forEach((event) => {
@@ -123,6 +155,57 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     loadData();
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function syncOnboarding() {
+      const [eventSeen, captureSeen] = await AsyncStorage.multiGet([EVENT_ONBOARDING_KEY, CAPTURE_ONBOARDING_KEY]);
+
+      if (!isMounted) {
+        return;
+      }
+
+      const hasCurrentEvent = Boolean(currentEvent?.name);
+      setShowEventOnboarding(!hasCurrentEvent && eventSeen?.[1] !== "true");
+      setShowCaptureOnboarding(hasCurrentEvent && people.length === 0 && captureSeen?.[1] !== "true");
+    }
+
+    void syncOnboarding();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentEvent?.name, people.length]);
+
+  useEffect(() => {
+    if (!currentEvent?.name) {
+      return;
+    }
+
+    void AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
+    setShowEventOnboarding(false);
+  }, [currentEvent?.name]);
+
+  async function dismissEventOnboarding() {
+    setShowEventOnboarding(false);
+    await AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
+  }
+
+  async function dismissCaptureOnboarding() {
+    setShowCaptureOnboarding(false);
+    await AsyncStorage.setItem(CAPTURE_ONBOARDING_KEY, "true");
+  }
+
+  async function handleOpenCurrentEventOnboarding() {
+    await dismissEventOnboarding();
+    onRequestOpenCurrentEvent?.();
+  }
+
+  async function handleOpenCaptureOnboarding() {
+    await dismissCaptureOnboarding();
+    openCapture();
+  }
+
   async function handleSaveDraft(draft: ParsedPersonDraft) {
     if (isSaving) {
       return;
@@ -136,8 +219,12 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
         draft.name,
         draft.company,
         draft.linkedinUrl,
+        draft.email,
         draft.phoneNumber,
-        draft.isVip
+        draft.preferredChannel,
+        draft.preferredChannelOther,
+        draft.priority,
+        draft.tags
       );
 
       let eventId: string | null = null;
@@ -152,7 +239,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
         userId,
         personId: person.id,
         eventId,
-        rawNote: buildInteractionRecord(draft.notes, draft.followUp, draft.company),
+        rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
       setCaptureOpen(false);
@@ -166,6 +253,32 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
     }
   }
 
+  function openCapture() {
+    setCaptureOpen(true);
+  }
+
+  function renderPersonCard(person: (typeof people)[number], variant: "default" | "muted" = "default") {
+    return (
+      <Card key={person.id} style={[styles.connectionCard, variant === "muted" ? styles.mutedCard : null]}>
+        <View style={styles.connectionHeader}>
+          <View style={styles.connectionMain}>
+            <Typography variant="h2">{person.name}</Typography>
+            <Typography variant="caption">
+              {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
+            </Typography>
+          </View>
+          <View style={styles.statusPill}>
+            <Typography variant="caption" style={styles.statusPillText}>{person.statusLabel}</Typography>
+          </View>
+        </View>
+        <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
+          {person.nextStep || person.whatMatters || person.lastInteractionNote}
+        </Typography>
+        <Typography variant="caption">{person.bannerLabel}</Typography>
+      </Card>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
@@ -173,13 +286,67 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.heroRow}>
-            <View style={styles.heroCopy}>
-              <Typography variant="caption">Black Book</Typography>
-              <Typography variant="h1">Making follow-ups with connections easier than ever.</Typography>
+          <View style={styles.headerRow}>
+            <View style={styles.headerCopy}>
+              <Typography variant="caption">Today</Typography>
+              <Typography variant="h1">Blackbook</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Track warm contacts, spot follow-ups that are slipping, and keep event momentum alive.
+              </Typography>
             </View>
-            <Button label="Add person" onPress={() => setCaptureOpen(true)} fullWidth={false} />
           </View>
+
+
+
+          {currentEvent ? (
+            <Card style={styles.currentEventCard}>
+              <View style={styles.currentEventTopRow}>
+                <View style={styles.liveBadge}>
+                  <Typography variant="caption" style={styles.liveBadgeText}>Live event</Typography>
+                </View>
+                <Typography variant="caption">
+                  {currentEvent.category === "other" && currentEvent.customCategoryLabel?.trim()
+                    ? currentEvent.customCategoryLabel.trim()
+                    : formatCategoryLabel(currentEvent.category)}
+                </Typography>
+              </View>
+              <Typography variant="h2">{currentEvent.name}</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                {currentEvent.eventDate?.trim() ? `${currentEvent.eventDate.trim()} · ` : ""}
+                {currentEventSummary
+                  ? `${currentEventSummary.total} people added · ${currentEventSummary.outstanding} still need follow-up.`
+                  : "Any person saved now will be attached to this event."}
+              </Typography>
+            </Card>
+          ) : null}
+
+          {showEventOnboarding ? (
+            <Card style={styles.onboardingCard}>
+              <Typography variant="caption">Start here</Typography>
+              <Typography variant="h2">You are at an event right now.</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Set your current event first so every connection you capture carries the right context from the start.
+              </Typography>
+              <View style={styles.onboardingActions}>
+                <Button label="Set current event" onPress={() => void handleOpenCurrentEventOnboarding()} fullWidth={false} />
+                <Button label="Dismiss" onPress={() => void dismissEventOnboarding()} variant="ghost" fullWidth={false} />
+              </View>
+            </Card>
+          ) : null}
+
+          {showCaptureOnboarding ? (
+            <Card style={styles.onboardingCard}>
+              <Typography variant="caption">Next step</Typography>
+              <Typography variant="h2">Great. Who did you just meet?</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Capture your first connection from {currentEvent?.name || "this event"} and let the draft show the value instantly.
+              </Typography>
+              <View style={styles.onboardingActions}>
+                <Button label="Add connection" onPress={() => void handleOpenCaptureOnboarding()} fullWidth={false} />
+                <Button label="Dismiss" onPress={() => void dismissCaptureOnboarding()} variant="ghost" fullWidth={false} />
+              </View>
+            </Card>
+          ) : null}
 
           {errorMessage ? (
             <Card>
@@ -188,7 +355,18 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           ) : null}
 
           <Card style={styles.heroCard}>
-            <Typography variant="caption" style={styles.heroCaption}>Signals</Typography>
+            <View style={styles.heroTopRow}>
+              <View style={styles.heroCopy}>
+                <Typography variant="caption" style={styles.heroCaption}>Pulse</Typography>
+                <Typography variant="h2" style={styles.heroHeading}>What needs your attention now</Typography>
+              </View>
+              {waitingOnYouCount ? (
+                <View style={styles.heroBadge}>
+                  <Typography variant="caption" style={styles.heroBadgeText}>{waitingOnYouCount} waiting</Typography>
+                </View>
+              ) : null}
+            </View>
+
             <View style={styles.signalGrid}>
               <Pressable
                 style={[styles.signalCell, activeSignal === "tracked" ? styles.signalCellActive : null]}
@@ -208,7 +386,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                 }}
               >
                 <Typography variant="h2" style={styles.heroMetric}>{contactedTodayPeople.length}</Typography>
-                <Typography variant="caption" style={styles.heroCaption}>Contacted today</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>Reached out</Typography>
               </Pressable>
               <Pressable
                 style={[styles.signalCell, activeSignal === "needNudge" ? styles.signalCellActive : null]}
@@ -217,11 +395,44 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                   onOpenPeopleFilter?.("stale");
                 }}
               >
-                <Typography variant="h2" style={styles.heroMetric}>{people.filter((person) => isContactStale(person.daysSinceLastContact, person.isVip)).length}</Typography>
+                <Typography variant="h2" style={styles.heroMetric}>{nudgeCount}</Typography>
                 <Typography variant="caption" style={styles.heroCaption}>Need a nudge</Typography>
               </Pressable>
             </View>
           </Card>
+
+          {waitingOnYouCount ? (
+            <Card style={styles.bannerCard}>
+              <Typography variant="h2">{waitingOnYouCount} people are waiting on you</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Due today and overdue follow-ups are surfaced first so you can move quickly.
+              </Typography>
+            </Card>
+          ) : null}
+
+          {dueTodayPeople.length ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Typography variant="caption">Due today</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  Follow-ups that should happen before the day gets away from you.
+                </Typography>
+              </View>
+              {dueTodayPeople.map((person) => renderPersonCard(person, "muted"))}
+            </View>
+          ) : null}
+
+          {overduePeople.length ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Typography variant="caption">Overdue</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  These follow-ups slipped past the original plan.
+                </Typography>
+              </View>
+              {overduePeople.map((person) => renderPersonCard(person, "muted"))}
+            </View>
+          ) : null}
 
           {activeSignal !== "all" ? (
             <View style={styles.sectionHeaderRow}>
@@ -238,23 +449,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
 
           {activeSignal !== "all" ? (
             <View style={styles.section}>
-              {signalPeople.map((person) => (
-                <Card key={`signal-${person.id}`} style={styles.connectionCard}>
-                  <View style={styles.connectionHeader}>
-                    <View style={styles.connectionMain}>
-                      <Typography variant="h2">{person.name}</Typography>
-                      <Typography variant="caption">
-                        {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
-                      </Typography>
-                    </View>
-                    <Typography variant="caption">{person.statusLabel}</Typography>
-                  </View>
-                  <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
-                    {person.lastInteractionNote}
-                  </Typography>
-                  <Typography variant="caption">{person.bannerLabel}</Typography>
-                </Card>
-              ))}
+              {signalPeople.map((person) => renderPersonCard(person))}
               {!isLoading && signalPeople.length === 0 ? (
                 <Typography variant="body">No contacts in this segment yet.</Typography>
               ) : null}
@@ -269,23 +464,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
               </Typography>
             </View>
 
-            {recentPeople.map((person) => (
-              <Card key={person.id} style={styles.connectionCard}>
-                <View style={styles.connectionHeader}>
-                  <View style={styles.connectionMain}>
-                    <Typography variant="h2">{person.name}</Typography>
-                    <Typography variant="caption">
-                      {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
-                    </Typography>
-                  </View>
-                  <Typography variant="caption">{person.statusLabel}</Typography>
-                </View>
-                <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
-                  {person.lastInteractionNote}
-                </Typography>
-                <Typography variant="caption">{person.bannerLabel}</Typography>
-              </Card>
-            ))}
+            {recentPeople.map((person) => renderPersonCard(person))}
             {!isLoading && recentPeople.length === 0 ? (
               <Typography variant="body">No people tracked yet.</Typography>
             ) : null}
@@ -298,20 +477,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
                 Contacts drifting beyond two weeks.
               </Typography>
             </View>
-            {followUpPeople.map((person) => (
-              <Card key={person.id} style={styles.followCard}>
-                <View style={styles.connectionHeader}>
-                  <View style={styles.connectionMain}>
-                    <Typography variant="h2">{person.name}</Typography>
-                    {person.company ? <Typography variant="caption">{person.company}</Typography> : null}
-                  </View>
-                  <Typography variant="caption">{person.bannerLabel}</Typography>
-                </View>
-                <Typography variant="body" style={styles.cardBody}>
-                  {person.followUp}
-                </Typography>
-              </Card>
-            ))}
+            {followUpPeople.map((person) => renderPersonCard(person, "muted"))}
             {!isLoading && followUpPeople.length === 0 ? (
               <Typography variant="body">Everyone is still warm.</Typography>
             ) : null}
@@ -340,11 +506,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           </View>
         </ScrollView>
 
-        <FloatingFab
-          extended
-          label="Met someone"
-          onPress={() => setCaptureOpen(true)}
-        />
+        <FloatingFab label="+" onPress={openCapture} />
 
         <CaptureModal
           visible={isCaptureOpen}
@@ -352,6 +514,8 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter }: HomeScreenProps
           onSave={handleSaveDraft}
           isSaving={isSaving}
           lockedEvent={currentEvent}
+          initialMethod="manual"
+          showQuickCapture
         />
       </View>
     </SafeAreaView>
@@ -369,25 +533,92 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
-    paddingTop: layout.stackGap,
+    paddingTop: layout.sectionGap,
     paddingBottom: 120,
+    gap: layout.sectionGap,
+  },
+  headerRow: {
+    gap: 10,
+  },
+  headerCopy: {
+    gap: 8,
+  },
+  quickCaptureCard: {
+    gap: 14,
+  },
+  quickCaptureHeader: {
+    gap: 8,
+  },
+  quickCaptureCopy: {
+    gap: 6,
+  },
+  quickCaptureRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  currentEventCard: {
+    backgroundColor: colors.surface,
+    gap: 10,
+  },
+  onboardingCard: {
+    gap: 12,
+    borderColor: colors.primaryAction,
+  },
+  onboardingActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  currentEventTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  liveBadge: {
+    alignSelf: "flex-start",
+    borderRadius: radius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: colors.successSoft,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  liveBadgeText: {
+    color: "#17843A",
+  },
+  heroCard: {
+    backgroundColor: colors.primaryAction,
+    borderColor: colors.primaryAction,
     gap: 18,
   },
-  heroRow: {
+  heroTopRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
     justifyContent: "space-between",
+    alignItems: "flex-start",
     gap: 12,
   },
   heroCopy: {
     flex: 1,
-    gap: 8,
+    gap: 6,
   },
-  heroCard: {
-    backgroundColor: colors.primaryAction,
+  heroHeading: {
+    color: colors.background,
+  },
+  heroBadge: {
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  heroBadgeText: {
+    color: colors.background,
+  },
+  bannerCard: {
+    gap: 10,
   },
   signalGrid: {
-    marginTop: 18,
     flexDirection: "row",
     gap: 10,
   },
@@ -401,7 +632,7 @@ const styles = StyleSheet.create({
   signalCellActive: {
     backgroundColor: "rgba(255,255,255,0.18)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.4)",
+    borderColor: "rgba(255,255,255,0.35)",
   },
   heroMetric: {
     color: colors.background,
@@ -427,8 +658,7 @@ const styles = StyleSheet.create({
   connectionCard: {
     gap: 10,
   },
-  followCard: {
-    gap: 8,
+  mutedCard: {
     backgroundColor: colors.surfaceMuted,
   },
   connectionHeader: {
@@ -440,6 +670,17 @@ const styles = StyleSheet.create({
   connectionMain: {
     flex: 1,
     gap: 6,
+  },
+  statusPill: {
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  statusPillText: {
+    color: colors.textSecondary,
   },
   cardBody: {
     color: colors.textSecondary,

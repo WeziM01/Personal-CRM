@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Linking, SafeAreaView, ScrollView, Share, StyleSheet, TextInput, View } from "react-native";
+import { Alert, AppState, Linking, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
+import { FloatingActionBar } from "../components/FloatingActionBar";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
 import {
   EVENT_CATEGORY_OPTIONS,
+  PERSON_TAG_SUGGESTIONS,
   buildReconnectDraft,
   JUST_CONNECTED_THRESHOLD,
   RECENT_CONTACT_THRESHOLD,
@@ -19,14 +21,16 @@ import {
   getOrCreateEvent,
   listPeopleInsights,
   markPersonContactedToday,
-  toWhatsAppUrl,
   updateInteraction,
   updatePersonDetails,
   isContactStale,
 } from "../lib/crm";
 import { colors, layout } from "../theme/tokens";
+import { openFollowUpInCalendar } from "../lib/calendar";
+import { clearPendingExternalAction, getPendingExternalAction, PendingExternalAction, setPendingExternalAction } from "../lib/externalActionFlow";
 
 type SortMode = "recent" | "stale" | "name" | "frequency";
+type CaptureMode = "createInteraction" | "createPerson" | "edit";
 export type PersonStatusMode = "all" | "today" | "recent" | "stale";
 
 type PersonProfileScreenProps = {
@@ -40,20 +44,41 @@ export function PersonProfileScreen({
   forcedStatusMode = null,
   forcedStatusNonce = 0,
 }: PersonProfileScreenProps) {
+  const { width } = useWindowDimensions();
+  const isCompactLayout = width < 720;
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [isDeleting, setDeleting] = useState(false);
-  const [deleteArmedPersonId, setDeleteArmedPersonId] = useState<string | null>(null);
-  const [editorMode, setEditorMode] = useState<"create" | "edit">("create");
+  const [editorMode, setEditorMode] = useState<CaptureMode>("createInteraction");
   const [editorDraft, setEditorDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
-  const [sortMode, setSortMode] = useState<SortMode>("recent");
+  const [sortMode, setSortMode] = useState<SortMode>("name");
   const [statusMode, setStatusMode] = useState<PersonStatusMode>("all");
   const [categoryMode, setCategoryMode] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
+  const [selectedTag, setSelectedTag] = useState<string>("all");
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [draftPreviewPerson, setDraftPreviewPerson] = useState<(typeof people)[number] | null>(null);
+  const [draftPreviewText, setDraftPreviewText] = useState("");
+  const [personActionMenu, setPersonActionMenu] = useState<(typeof people)[number] | null>(null);
+  const [isInteractionPickerOpen, setInteractionPickerOpen] = useState(false);
+  const [pendingExternalAction, setPendingExternalActionState] = useState<PendingExternalAction | null>(null);
+  const [showPendingExternalReturn, setShowPendingExternalReturn] = useState(false);
+
+  const availableTags = useMemo(() => {
+    return Array.from(new Set([...PERSON_TAG_SUGGESTIONS, ...people.flatMap((person) => person.tags)])).sort();
+  }, [people]);
+
+  const sortLabel =
+    sortMode === "name"
+      ? "A-Z"
+      : sortMode === "recent"
+        ? "Recent"
+        : sortMode === "stale"
+          ? "Need nudge first"
+          : "Most logged";
 
   const filteredPeople = useMemo(() => {
     const statusFiltered = people.filter((person) => {
@@ -66,7 +91,7 @@ export function PersonProfileScreen({
       }
 
       if (statusMode === "stale") {
-        return isContactStale(person.daysSinceLastContact, person.isVip);
+        return isContactStale(person.daysSinceLastContact, person.priority);
       }
 
       return true;
@@ -76,11 +101,15 @@ export function PersonProfileScreen({
       (person) => categoryMode === "all" || person.lastEventCategory === categoryMode
     );
 
+    const tagFiltered = categoryFiltered.filter(
+      (person) => selectedTag === "all" || person.tags.includes(selectedTag)
+    );
+
     const query = searchQuery.trim().toLowerCase();
     const searchedPeople = !query
-      ? categoryFiltered
-      : categoryFiltered.filter((person) =>
-          [person.name, person.company, person.lastInteractionNote, person.followUp, person.lastEventName || ""]
+      ? tagFiltered
+      : tagFiltered.filter((person) =>
+          [person.name, person.company, person.lastInteractionNote, person.followUp, person.lastEventName || "", person.tags.join(" ")]
             .join(" ")
             .toLowerCase()
             .includes(query)
@@ -103,13 +132,15 @@ export function PersonProfileScreen({
       const rightValue = right.lastInteractionAt || right.createdAt;
       return rightValue.localeCompare(leftValue);
     });
-  }, [categoryMode, people, searchQuery, sortMode, statusMode]);
+  }, [categoryMode, people, searchQuery, selectedTag, sortMode, statusMode]);
 
   const selectedPerson = useMemo(() => {
-    return (
-      filteredPeople.find((person) => person.id === selectedPersonId) || filteredPeople[0] || null
-    );
-  }, [filteredPeople, selectedPersonId]);
+    if (selectedPersonId) {
+      return filteredPeople.find((person) => person.id === selectedPersonId) || null;
+    }
+    // Only show a selected contact if the user has manually selected one
+    return null;
+  }, [filteredPeople, isCompactLayout, selectedPersonId]);
 
   async function loadProfileData() {
     try {
@@ -119,13 +150,12 @@ export function PersonProfileScreen({
       const userId = await ensureSessionUserId();
       const insights = await listPeopleInsights(userId);
       setPeople(insights);
-      setDeleteArmedPersonId(null);
       setSelectedPersonId((current) => {
         if (current && insights.some((person) => person.id === current)) {
           return current;
         }
 
-        return insights[0]?.id || null;
+        return isCompactLayout ? null : insights[0]?.id || null;
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load profile.";
@@ -147,22 +177,123 @@ export function PersonProfileScreen({
     setStatusMode(forcedStatusMode);
   }, [forcedStatusMode, forcedStatusNonce]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function hydratePendingExternalAction() {
+      const pending = await getPendingExternalAction();
+      if (isMounted) {
+        setPendingExternalActionState(pending);
+      }
+    }
+
+    void hydratePendingExternalAction();
+
+    const appStateSubscription = AppState.addEventListener("change", async (state) => {
+      if (state !== "active") {
+        return;
+      }
+
+      const pending = await getPendingExternalAction();
+      if (pending) {
+        setPendingExternalActionState(pending);
+        setShowPendingExternalReturn(true);
+      }
+    });
+
+    const handleWindowFocus = async () => {
+      const pending = await getPendingExternalAction();
+      if (pending) {
+        setPendingExternalActionState(pending);
+        setShowPendingExternalReturn(true);
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", handleWindowFocus);
+      document.addEventListener("visibilitychange", handleWindowFocus);
+    }
+
+    return () => {
+      isMounted = false;
+      appStateSubscription.remove();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", handleWindowFocus);
+        document.removeEventListener("visibilitychange", handleWindowFocus);
+      }
+    };
+  }, []);
+
+  async function markExternalActionStarted(destinationLabel: string, message?: string) {
+    const pending = await setPendingExternalAction({ destinationLabel, message });
+    setPendingExternalActionState(pending);
+  }
+
+  async function completeExternalActionFlow() {
+    await clearPendingExternalAction();
+    setPendingExternalActionState(null);
+    setShowPendingExternalReturn(false);
+  }
+
+  function keepWaitingOnExternalAction() {
+    setShowPendingExternalReturn(false);
+  }
+
+  function openCreateInteractionForPerson(person: (typeof people)[number]) {
+    setEditorMode("createInteraction");
+    setEditorDraft({
+      name: person.name,
+      priority: person.priority,
+      tags: person.tags,
+      company: person.company,
+      linkedinUrl: person.linkedinUrl,
+      email: person.email,
+      phoneNumber: person.phoneNumber,
+      event: person.lastEventName || "",
+      whatMatters: "",
+      nextStep: "",
+      nextFollowUpAt: "",
+      followUpPreset: "",
+    });
+    setCaptureOpen(true);
+  }
+
   function openCreateInteraction() {
-    setEditorMode("create");
-    setEditorDraft(
-      selectedPerson
-        ? {
-            name: selectedPerson.name,
-            isVip: selectedPerson.isVip,
-            company: selectedPerson.company,
-          linkedinUrl: selectedPerson.linkedinUrl,
-          phoneNumber: selectedPerson.phoneNumber,
-            event: selectedPerson.lastEventName || "",
-            notes: "",
-            followUp: selectedPerson.followUp === "None yet" ? "" : selectedPerson.followUp,
-          }
-        : null
-    );
+    if (selectedPerson) {
+      openCreateInteractionForPerson(selectedPerson);
+      return;
+    }
+
+    if (isCompactLayout) {
+      if (!filteredPeople.length) {
+        openCreatePerson("");
+        return;
+      }
+
+      setInteractionPickerOpen(true);
+      return;
+    }
+
+    Alert.alert("Select a contact first", "No contact is selected yet.");
+  }
+
+  function openCreatePerson(initialName = searchQuery.trim()) {
+    setEditorMode("createPerson");
+    setEditorDraft({
+      name: initialName,
+      priority: "medium",
+      tags: [],
+      company: "",
+      linkedinUrl: "",
+      email: "",
+      phoneNumber: "",
+      event: currentEvent?.name || "",
+      eventCategory: currentEvent?.category || "",
+      whatMatters: "",
+      nextStep: "",
+      nextFollowUpAt: "",
+      followUpPreset: "",
+    });
     setCaptureOpen(true);
   }
 
@@ -173,17 +304,7 @@ export function PersonProfileScreen({
     }
 
     setSelectedPersonId(null);
-    setEditorMode("create");
-    setEditorDraft({
-      name: nameFromSearch,
-      isVip: false,
-      company: "",
-      event: currentEvent?.name || "",
-      eventCategory: currentEvent?.category || "",
-      notes: "",
-      followUp: "",
-    });
-    setCaptureOpen(true);
+    openCreatePerson(nameFromSearch);
   }
 
   function openEditPerson(person = selectedPerson) {
@@ -195,19 +316,28 @@ export function PersonProfileScreen({
     setEditorMode("edit");
     setEditorDraft({
       name: person.name,
-      isVip: person.isVip,
+      priority: person.priority,
+      tags: person.tags,
       company: person.company,
       linkedinUrl: person.linkedinUrl,
+      email: person.email,
       phoneNumber: person.phoneNumber,
       event: person.lastEventName || "",
-      notes: person.lastInteractionNote,
-      followUp: person.followUp === "None yet" ? "" : person.followUp,
+      whatMatters: person.whatMatters || person.lastInteractionNote,
+      nextStep: person.nextStep || "",
+      nextFollowUpAt: person.nextFollowUpAt || "",
+      followUpPreset: "",
     });
     setCaptureOpen(true);
   }
 
   async function handleSaveInteraction(draft: ParsedPersonDraft) {
     if (isSaving) {
+      return;
+    }
+
+    if (editorMode === "createInteraction" && !draft.whatMatters.trim() && !draft.nextStep.trim()) {
+      Alert.alert("Context required", "Add what matters or the next step before saving.");
       return;
     }
 
@@ -220,9 +350,11 @@ export function PersonProfileScreen({
           userId,
           personId: selectedPerson.id,
           name: draft.name,
-          isVip: draft.isVip,
+          priority: draft.priority,
+          tags: draft.tags,
           company: draft.company,
           linkedinUrl: draft.linkedinUrl,
+          email: draft.email,
           phoneNumber: draft.phoneNumber,
         });
 
@@ -232,7 +364,7 @@ export function PersonProfileScreen({
           eventId = (await getOrCreateEvent(userId, editEventName, draft.eventCategory || null)).id;
         }
 
-        const rawNote = buildInteractionRecord(draft.notes, draft.followUp, draft.company);
+        const rawNote = buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt);
 
         if (selectedPerson.lastInteractionId) {
           await updateInteraction({
@@ -256,16 +388,35 @@ export function PersonProfileScreen({
         return;
       }
 
-      const activePersonId =
-        selectedPerson?.id ||
-        (await createPerson(
+      let activePersonId = selectedPerson?.id || null;
+      if (editorMode === "createPerson" || !selectedPerson) {
+        activePersonId = (
+          await createPerson(
+            userId,
+            draft.name === "Unknown contact" ? "New Person" : draft.name,
+            draft.company,
+            draft.linkedinUrl,
+            draft.email,
+            draft.phoneNumber,
+            draft.preferredChannel,
+            draft.preferredChannelOther,
+            draft.priority,
+            draft.tags
+          )
+        ).id;
+      } else {
+        await updatePersonDetails({
           userId,
-          draft.name === "Unknown contact" ? "New Person" : draft.name,
-          draft.company,
-          draft.linkedinUrl,
-          draft.phoneNumber,
-          draft.isVip
-        )).id;
+          personId: selectedPerson.id,
+          name: draft.name,
+          company: draft.company,
+          linkedinUrl: draft.linkedinUrl,
+          email: draft.email,
+          phoneNumber: draft.phoneNumber,
+          priority: draft.priority,
+          tags: draft.tags,
+        });
+      }
 
       let eventId: string | null = null;
       const eventName = currentEvent?.name || draft.event;
@@ -274,11 +425,15 @@ export function PersonProfileScreen({
         eventId = (await getOrCreateEvent(userId, eventName, eventCategory)).id;
       }
 
+      if (!activePersonId) {
+        throw new Error("Unable to determine which contact to save this interaction for.");
+      }
+
       await createInteraction({
         userId,
         personId: activePersonId,
         eventId,
-        rawNote: buildInteractionRecord(draft.notes, draft.followUp, draft.company),
+        rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
       setCaptureOpen(false);
@@ -292,88 +447,212 @@ export function PersonProfileScreen({
     }
   }
 
-  async function handleMarkContactedToday() {
-    if (!selectedPerson) {
+  function handleToggleExpandedPerson(personId: string) {
+    setSelectedPersonId((current) => (current === personId ? null : personId));
+  }
+
+  async function handleMarkContactedToday(person = selectedPerson) {
+    if (!person) {
       return;
     }
 
     try {
       const userId = await ensureSessionUserId();
-      await markPersonContactedToday(userId, selectedPerson.id);
+      await markPersonContactedToday(userId, person.id);
       await loadProfileData();
-      Alert.alert("Updated", `${selectedPerson.name} marked as contacted today.`);
+      Alert.alert("Updated", `${person.name} marked as contacted today.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to mark contact.";
       Alert.alert("Update failed", message);
     }
   }
 
-  async function handleDeletePerson() {
-    if (!selectedPerson) {
-      return;
-    }
-
-    if (deleteArmedPersonId !== selectedPerson.id) {
-      setDeleteArmedPersonId(selectedPerson.id);
+  async function performDeletePerson(person = selectedPerson) {
+    if (!person) {
       return;
     }
 
     try {
       setDeleting(true);
       const userId = await ensureSessionUserId();
-      await deletePerson(userId, selectedPerson.id);
+      await deletePerson(userId, person.id);
+      setPeople((current) => current.filter((entry) => entry.id !== person.id));
+      setSelectedPersonId((current) => (current === person.id ? null : current));
+      setPersonActionMenu((current) => (current?.id === person.id ? null : current));
       await loadProfileData();
-      Alert.alert("Deleted", `${selectedPerson.name} removed.`);
+      Alert.alert("Deleted", `${person.name} removed.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to delete contact.";
       Alert.alert("Delete failed", message);
     } finally {
       setDeleting(false);
-      setDeleteArmedPersonId(null);
     }
   }
 
-  async function handleOpenExternal(url: string) {
+  function handleDeletePerson(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    const confirmDelete = () => {
+      void performDeletePerson(person);
+    };
+
+    if (Platform.OS === "web" && typeof window !== "undefined" && typeof window.confirm === "function") {
+      const confirmed = window.confirm(`${person.name} will be removed permanently.`);
+      if (confirmed) {
+        confirmDelete();
+      }
+      return;
+    }
+
+    Alert.alert(
+      "Delete contact?",
+      `${person.name} will be removed permanently.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: confirmDelete,
+        },
+      ]
+    );
+  }
+
+  async function handleOpenExternal(url: string, destinationLabel = "external app") {
     try {
+      await markExternalActionStarted(destinationLabel);
       await Linking.openURL(url);
     } catch {
+      await clearPendingExternalAction();
+      setPendingExternalActionState(null);
       Alert.alert("Open failed", "Could not open that link on this device.");
     }
   }
 
-  function buildMessageForSelectedPerson() {
-    if (!selectedPerson) {
+
+  function getMomentLabel(count: number) {
+    return `${count} logged ${count === 1 ? "moment" : "moments"}`;
+  }
+
+  async function handleAddToCalendar(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    if (!person.nextFollowUpAt) {
+      Alert.alert("No follow-up date", `Set a follow-up date for ${person.name} first.`);
+      return;
+    }
+
+    try {
+      await markExternalActionStarted("calendar", `Follow-up for ${person.name}`);
+      await openFollowUpInCalendar({
+        name: person.name,
+        company: person.company,
+        nextFollowUpAt: person.nextFollowUpAt,
+        whatMatters: person.whatMatters,
+        nextStep: person.nextStep,
+        linkedinUrl: person.linkedinUrl,
+      });
+    } catch (error) {
+      await clearPendingExternalAction();
+      setPendingExternalActionState(null);
+      const message = error instanceof Error ? error.message : "Could not open the calendar handoff.";
+      Alert.alert("Calendar handoff failed", message);
+    }
+  }
+
+  function buildMessageForPerson(person = selectedPerson) {
+    if (!person) {
       return "";
     }
 
     return buildReconnectDraft({
-      name: selectedPerson.name,
-      eventName: selectedPerson.lastEventName,
-      lastInteractionNote: selectedPerson.lastInteractionNote,
-      followUp: selectedPerson.followUp,
+      name: person.name,
+      eventName: person.lastEventName,
+      lastInteractionNote: person.lastInteractionNote,
+      followUp: person.followUp,
     });
   }
 
-  async function handleDraftMessage() {
-    if (!selectedPerson) {
+  async function openWhatsAppOnWeb(browserUrl: string, personName: string) {
+    if (typeof window === "undefined") {
+      await Linking.openURL(browserUrl);
       return;
     }
 
-    const message = buildMessageForSelectedPerson();
-    const whatsappBase = selectedPerson.phoneNumber ? toWhatsAppUrl(selectedPerson.phoneNumber) : null;
-    const whatsappUrl = whatsappBase ? `${whatsappBase}?text=${encodeURIComponent(message)}` : null;
+    try {
+      const openedWindow = window.open(browserUrl, "_blank", "noopener,noreferrer");
+      if (openedWindow) {
+        openedWindow.opener = null;
+        return;
+      }
+    } catch {
+      // fall through to same-tab navigation
+    }
 
     try {
-      if (whatsappUrl) {
-        const canOpenWhatsApp = await Linking.canOpenURL(whatsappUrl);
+      window.location.assign(browserUrl);
+      return;
+    } catch {
+      Alert.alert("Open failed", `Could not open WhatsApp Web for ${personName}.`);
+    }
+  }
+
+  async function openDraftMessage(person = selectedPerson, messageOverride?: string) {
+    if (!person) {
+      return;
+    }
+
+    const message = messageOverride?.trim() || buildMessageForPerson(person);
+    const digits = person.phoneNumber
+      ? person.phoneNumber.replace(/[^\d+]/g, "").replace(/^00/, "+")
+      : "";
+    const normalizedPhone = digits.startsWith("+") ? digits.slice(1) : digits;
+    const encodedMessage = encodeURIComponent(message);
+    const destinationLabel = person.name ? `WhatsApp for ${person.name}` : "WhatsApp";
+    const whatsappAppUrl = normalizedPhone ? `whatsapp://send?phone=${normalizedPhone}&text=${encodedMessage}` : null;
+    const whatsappApiUrl = normalizedPhone
+      ? `https://api.whatsapp.com/send/?phone=${normalizedPhone}&text=${encodedMessage}&type=phone_number&app_absent=0`
+      : null;
+    const whatsappWebUrl = normalizedPhone ? `https://wa.me/${normalizedPhone}?text=${encodedMessage}` : null;
+
+    try {
+      await markExternalActionStarted(destinationLabel, message);
+
+      if (Platform.OS === "web") {
+        const browserUrl = whatsappWebUrl || whatsappApiUrl;
+        if (!browserUrl) {
+          Alert.alert("No WhatsApp number", `Add a phone number for ${person.name} before opening WhatsApp.`);
+          return;
+        }
+
+        await openWhatsAppOnWeb(browserUrl, person.name);
+        return;
+      }
+
+      if (whatsappAppUrl) {
+        const canOpenWhatsApp = await Linking.canOpenURL(whatsappAppUrl);
         if (canOpenWhatsApp) {
-          await Linking.openURL(whatsappUrl);
+          await Linking.openURL(whatsappAppUrl);
           return;
         }
       }
 
-      if (selectedPerson.phoneNumber) {
-        const smsUrl = `sms:${selectedPerson.phoneNumber}?body=${encodeURIComponent(message)}`;
+      if (whatsappApiUrl) {
+        await Linking.openURL(whatsappApiUrl);
+        return;
+      }
+
+      if (whatsappWebUrl) {
+        await Linking.openURL(whatsappWebUrl);
+        return;
+      }
+
+      if (person.phoneNumber) {
+        const smsUrl = `sms:${person.phoneNumber}?body=${encodedMessage}`;
         const canOpenSms = await Linking.canOpenURL(smsUrl);
         if (canOpenSms) {
           await Linking.openURL(smsUrl);
@@ -383,62 +662,69 @@ export function PersonProfileScreen({
 
       Alert.alert("No supported message app", "Use Copy message and paste it into any app.");
     } catch {
+      await clearPendingExternalAction();
+      setPendingExternalActionState(null);
       Alert.alert("Draft failed", "Use Copy message and paste it into any app.");
     }
   }
 
-  async function handleCopyMessage() {
-    if (!selectedPerson) {
+  function handleDraftMessage(person = selectedPerson) {
+    if (!person) {
       return;
     }
 
-    const message = buildMessageForSelectedPerson();
-
-    try {
-      await Share.share({
-        message,
-        title: `Follow up with ${selectedPerson.name}`,
-      });
-    } catch {
-      Alert.alert("Copy fallback", message);
-    }
-  }
-
-  async function handleToggleVip() {
-    if (!selectedPerson) {
+    if (!person.phoneNumber) {
+      Alert.alert("No WhatsApp number", `Add a phone number for ${person.name} before opening a WhatsApp draft.`);
       return;
     }
 
-    try {
-      const userId = await ensureSessionUserId();
-      await updatePersonDetails({
-        userId,
-        personId: selectedPerson.id,
-        name: selectedPerson.name,
-        company: selectedPerson.company,
-        linkedinUrl: selectedPerson.linkedinUrl,
-        phoneNumber: selectedPerson.phoneNumber,
-        isVip: !selectedPerson.isVip,
-      });
-      await loadProfileData();
-      Alert.alert("Updated", !selectedPerson.isVip ? `${selectedPerson.name} marked as a lead.` : `${selectedPerson.name} is now a normal contact.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to update priority.";
-      Alert.alert("Update failed", message);
-    }
+    setDraftPreviewText(buildMessageForPerson(person));
+    setDraftPreviewPerson(person);
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <View style={styles.headerRow}>
+          <View style={[styles.headerRow, isCompactLayout ? styles.headerRowCompact : null]}>
             <View style={styles.headerCopy}>
               <Typography variant="caption">People</Typography>
               <Typography variant="h1">Your live contact ledger, sorted by warmth and context.</Typography>
             </View>
-            <Button label="Add interaction" onPress={openCreateInteraction} fullWidth={false} />
+            {!isCompactLayout ? (
+              <View style={styles.headerActions}>
+                <Button label="Add person" onPress={() => openCreatePerson("")} variant="ghost" fullWidth={false} />
+                <Button label="Add interaction" onPress={openCreateInteraction} fullWidth={false} />
+              </View>
+            ) : null}
           </View>
+
+
+{pendingExternalAction ? (
+  <Card style={styles.pendingExternalCard}>
+    <Typography variant="caption">Return and continue</Typography>
+    <Typography variant="body" style={styles.confirmMeta}>
+      You still have an external action open for {pendingExternalAction.destinationLabel}. Finish there, then come back here to continue.
+    </Typography>
+    <View style={styles.confirmActions}>
+      <Button
+        label="I have finished"
+        fullWidth={false}
+        size="compact"
+        onPress={() => {
+          void completeExternalActionFlow();
+        }}
+      />
+      <Button
+        label="Dismiss"
+        variant="ghost"
+        fullWidth={false}
+        size="compact"
+        onPress={keepWaitingOnExternalAction}
+      />
+    </View>
+  </Card>
+) : null}
 
           <Card>
             <Typography variant="caption">Last connected</Typography>
@@ -508,7 +794,7 @@ export function PersonProfileScreen({
                 size="compact"
               />
               <Button
-                label="Name"
+                label="A-Z"
                 onPress={() => setSortMode("name")}
                 variant={sortMode === "name" ? "primary" : "ghost"}
                 fullWidth={false}
@@ -527,7 +813,7 @@ export function PersonProfileScreen({
               Search
             </Typography>
             <TextInput
-              placeholder="Search name, company, notes, follow-up"
+              placeholder="Search name, company, notes, tags"
               placeholderTextColor={colors.textTertiary}
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -535,78 +821,106 @@ export function PersonProfileScreen({
               autoCapitalize="none"
               autoCorrect={false}
             />
-          </Card>
 
-          {selectedPerson ? (
-            <Card style={styles.featureCard}>
-              <Typography variant="caption">Selected contact</Typography>
-              <Typography variant="h1">{selectedPerson.isVip ? "⭐ " : ""}{selectedPerson.name}</Typography>
-              <Typography variant="body" style={styles.featureBody}>
-                {selectedPerson.bannerLabel} · {selectedPerson.interactionCount} logged moments · {selectedPerson.lastEventName || "No event yet"}
-              </Typography>
-              {selectedPerson.company ? (
-                <Typography variant="caption">{selectedPerson.company}</Typography>
-              ) : null}
-              {searchQuery ? <Typography variant="caption">Search: {searchQuery}</Typography> : null}
-
-              <View style={styles.actionRow}>
-                <Button label="Draft Message" onPress={handleDraftMessage} fullWidth={false} size="compact" />
-                <Button label="Copy / Share" onPress={handleCopyMessage} variant="ghost" fullWidth={false} size="compact" />
+            <Typography variant="caption" style={styles.subSectionLabel}>
+              Tags
+            </Typography>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+              <Button
+                label="All tags"
+                onPress={() => setSelectedTag("all")}
+                variant={selectedTag === "all" ? "primary" : "ghost"}
+                fullWidth={false}
+                size="compact"
+              />
+              {availableTags.map((tag) => (
                 <Button
-                  label={selectedPerson.isVip ? "⭐ Unstar lead" : "⭐ Star lead"}
-                  onPress={handleToggleVip}
-                  variant="ghost"
+                  key={tag}
+                  label={tag}
+                  onPress={() => setSelectedTag(tag)}
+                  variant={selectedTag === tag ? "primary" : "ghost"}
                   fullWidth={false}
                   size="compact"
                 />
+              ))}
+            </ScrollView>
+          </Card>
+
+          {!isCompactLayout && selectedPerson ? (
+            <Card style={styles.featureCard}>
+              <Typography variant="caption">Selected contact</Typography>
+              <Typography variant="h1">{selectedPerson.name}</Typography>
+              <View style={styles.featureMetaRow}>
+                <Typography variant="body" style={styles.featureBody}>
+                  {selectedPerson.bannerLabel}
+                </Typography>
+                {selectedPerson.nextFollowUpAt ? (
+                  <>
+                    <Typography variant="body" style={styles.metaDivider}>·</Typography>
+                    <Pressable onPress={() => void handleAddToCalendar(selectedPerson)} style={styles.inlineMetaAction}>
+                      <Typography variant="body" style={styles.inlineMetaActionText}>📅 Add to Calendar</Typography>
+                    </Pressable>
+                  </>
+                ) : null}
+                <Typography variant="body" style={styles.metaDivider}>·</Typography>
+                <Typography variant="body" style={styles.featureBody}>
+                  {getMomentLabel(selectedPerson.interactionCount)}
+                </Typography>
+              </View>
+              {selectedPerson.company ? (
+                <Typography variant="caption">{selectedPerson.company}</Typography>
+              ) : null}
+              {selectedPerson.tags.length ? (
+                <View style={styles.tagPillRow}>
+                  {selectedPerson.tags.map((tag) => (
+                    <View key={tag} style={styles.tagPill}>
+                      <Typography variant="caption">{tag}</Typography>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {searchQuery ? <Typography variant="caption">Search: {searchQuery}</Typography> : null}
+
+              <View style={styles.primaryActionRow}>
+                <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(selectedPerson)} fullWidth={false} size="compact" />
                 {selectedPerson.linkedinUrl ? (
                   <Button
-                    label="Open LinkedIn"
-                    onPress={() => handleOpenExternal(selectedPerson.linkedinUrl)}
+                    label="LinkedIn"
+                    onPress={() => handleOpenExternal(selectedPerson.linkedinUrl, `LinkedIn for ${selectedPerson.name}`)}
                     variant="ghost"
                     fullWidth={false}
                     size="compact"
                   />
                 ) : null}
-                <Button
-                  label="Edit details"
-                  onPress={() => openEditPerson(selectedPerson)}
-                  variant="ghost"
-                  fullWidth={false}
-                  size="compact"
-                />
-                <Button
-                  label="Mark contacted today"
-                  onPress={handleMarkContactedToday}
-                  fullWidth={false}
-                  size="compact"
-                />
-                <Button
-                  label="Delete user"
-                  onPress={handleDeletePerson}
-                  variant="ghost"
-                  fullWidth={false}
-                  size="compact"
-                  loading={isDeleting}
-                  style={deleteArmedPersonId === selectedPerson.id ? styles.armedDeleteButton : null}
-                />
               </View>
 
-              {deleteArmedPersonId === selectedPerson.id ? (
-                <Typography variant="caption">Tap delete again to confirm removal.</Typography>
-              ) : null}
+              <View style={styles.secondaryActionRow}>
+                <Button
+                  label="✓ Reached out"
+                  onPress={() => handleMarkContactedToday(selectedPerson)}
+                  variant="ghost"
+                  fullWidth={false}
+                  size="compact"
+                />
+                <Button
+                  label="Edit"
+                  onPress={() => setPersonActionMenu(selectedPerson)}
+                  variant="ghost"
+                  fullWidth={false}
+                  size="compact"
+                />
+              </View>
 
               <Typography variant="body" style={styles.featureNote}>
                 {selectedPerson.lastInteractionNote}
               </Typography>
-              <Typography variant="caption">Follow up: {selectedPerson.followUp}</Typography>
             </Card>
           ) : null}
 
           <View style={styles.timelineHeader}>
             <Typography variant="caption">All connections</Typography>
             <Typography variant="body" style={styles.timelineCount}>
-              {filteredPeople.length} people in view
+              {filteredPeople.length} people in view ({sortLabel}{selectedTag !== "all" ? ` · ${selectedTag}` : ""})
             </Typography>
           </View>
 
@@ -619,32 +933,93 @@ export function PersonProfileScreen({
           <View style={styles.timelineStack}>
             {filteredPeople.map((person) => (
               <Card key={person.id} style={person.id === selectedPerson?.id ? styles.selectedCard : null}>
-                <View style={styles.rowTop}>
-                  <View style={styles.personCopy}>
-                    <Typography variant="h2">{person.name}</Typography>
-                    {person.isVip ? <Typography variant="caption">⭐ Starred lead</Typography> : null}
-                    <Typography variant="caption">
-                      {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
+                {isCompactLayout ? (
+                  <>
+                    <View style={styles.compactPersonRow}>
+                      <View style={styles.compactPersonMain}>
+                        <Typography variant="h2" numberOfLines={1}>{person.name}</Typography>
+                        <Typography variant="body" style={styles.compactCompany} numberOfLines={1}>
+                          {person.company || "No company"}
+                        </Typography>
+                      </View>
+                      <View style={styles.compactActions}>
+                        {person.linkedinUrl ? (
+                          <Pressable style={styles.iconButton} onPress={() => handleOpenExternal(person.linkedinUrl)}>
+                            <Typography variant="body" style={styles.iconButtonText}>in</Typography>
+                          </Pressable>
+                        ) : null}
+                        {person.phoneNumber ? (
+                          <Pressable style={styles.iconButton} onPress={() => handleDraftMessage(person)}>
+                            <Typography variant="body" style={styles.iconButtonText}>WA</Typography>
+                          </Pressable>
+                        ) : null}
+                        <Pressable style={styles.expandButton} onPress={() => handleToggleExpandedPerson(person.id)}>
+                          <Typography variant="body" style={styles.iconButtonText}>
+                            {selectedPersonId === person.id ? "v" : ">"}
+                          </Typography>
+                        </Pressable>
+                      </View>
+                    </View>
+
+                    {selectedPersonId === person.id ? (
+                      <View style={styles.expandedPersonContent}>
+                        <Typography variant="body" style={styles.noteText}>
+                          {person.lastInteractionNote}
+                        </Typography>
+                        <View style={styles.metaRow}>
+                          <Typography variant="caption">{person.bannerLabel}</Typography>
+                          {person.nextFollowUpAt ? (
+                            <Pressable onPress={() => void handleAddToCalendar(person)} style={styles.inlineMetaAction}>
+                              <Typography variant="caption" style={styles.inlineMetaActionCaption}>📅 Add to Calendar</Typography>
+                            </Pressable>
+                          ) : null}
+                          {isContactStale(person.daysSinceLastContact, person.priority) ? <Typography variant="caption">Need a nudge</Typography> : null}
+                          <Typography variant="caption">{getMomentLabel(person.interactionCount)}</Typography>
+                        </View>
+                        {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
+                        <View style={styles.compactExpandedActions}>
+                          <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(person)} fullWidth={false} size="compact" />
+                          {person.linkedinUrl ? (
+                            <Button label="LinkedIn" onPress={() => handleOpenExternal(person.linkedinUrl)} variant="ghost" fullWidth={false} size="compact" />
+                          ) : null}
+                        </View>
+                        <View style={styles.secondaryActionRow}>
+                          <Button label="✓ Reached out" onPress={() => handleMarkContactedToday(person)} variant="ghost" fullWidth={false} size="compact" />
+                          <Button label="Edit" onPress={() => setPersonActionMenu(person)} variant="ghost" fullWidth={false} size="compact" />
+                        </View>
+                      </View>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.rowTop}>
+                      <View style={styles.personCopy}>
+                        <Typography variant="h2">{person.name}</Typography>
+                        <Typography variant="caption">
+                          {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
+                        </Typography>
+                        {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
+                      </View>
+                      <Button
+                        label="Edit"
+                        onPress={() => setPersonActionMenu(person)}
+                        variant={person.id === selectedPerson?.id ? "primary" : "ghost"}
+                        fullWidth={false}
+                        size="compact"
+                      />
+                    </View>
+
+                    <Typography variant="body" style={styles.noteText} numberOfLines={2}>
+                      {person.lastInteractionNote}
                     </Typography>
-                  </View>
-                  <Button
-                    label={person.id === selectedPerson?.id ? "Editing" : "Edit"}
-                    onPress={() => openEditPerson(person)}
-                    variant={person.id === selectedPerson?.id ? "primary" : "ghost"}
-                    fullWidth={false}
-                    size="compact"
-                  />
-                </View>
 
-                <Typography variant="body" style={styles.noteText} numberOfLines={2}>
-                  {person.lastInteractionNote}
-                </Typography>
-
-                <View style={styles.metaRow}>
-                  <Typography variant="caption">{person.bannerLabel}</Typography>
-                  {isContactStale(person.daysSinceLastContact, person.isVip) ? <Typography variant="caption">Need a nudge</Typography> : null}
-                  <Typography variant="caption">{person.interactionCount} notes</Typography>
-                </View>
+                    <View style={styles.metaRow}>
+                      <Typography variant="caption">{person.bannerLabel}</Typography>
+                      {isContactStale(person.daysSinceLastContact, person.priority) ? <Typography variant="caption">Need a nudge</Typography> : null}
+                      <Typography variant="caption">{person.interactionCount} notes</Typography>
+                    </View>
+                  </>
+                )}
               </Card>
             ))}
             {!isLoading && filteredPeople.length === 0 ? (
@@ -671,16 +1046,211 @@ export function PersonProfileScreen({
           onSave={handleSaveInteraction}
           isSaving={isSaving}
           initialDraft={editorDraft}
-          lockedEvent={editorMode === "create" ? currentEvent : null}
-          title={editorMode === "edit" ? "Edit Contact" : "Add Interaction"}
-          saveLabel={editorMode === "edit" ? "Save Changes" : "Save Interaction"}
+          lockedEvent={editorMode === "edit" ? null : currentEvent}
+          title={editorMode === "edit" ? "Edit Contact" : editorMode === "createPerson" ? "Add Person" : "Add Interaction"}
+          saveLabel={editorMode === "edit" ? "Save Changes" : editorMode === "createPerson" ? "Save Person" : "Save Interaction"}
+          showQuickCapture={editorMode === "createPerson"}
         />
+
+        {isInteractionPickerOpen ? (
+          <View style={styles.confirmOverlay}>
+            <Pressable style={styles.confirmBackdrop} onPress={() => setInteractionPickerOpen(false)} />
+            <View style={styles.confirmCardWrap}>
+              <Card style={styles.confirmCard}>
+                <Typography variant="h2">Pick a contact</Typography>
+                <Typography variant="body" style={styles.confirmMeta}>
+                  Choose who this interaction should be saved against.
+                </Typography>
+                <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
+                  {filteredPeople.map((person) => (
+                    <Button
+                      key={person.id}
+                      label={person.name}
+                      variant="ghost"
+                      fullWidth={false}
+                      size="compact"
+                      onPress={() => {
+                        setSelectedPersonId(person.id);
+                        setInteractionPickerOpen(false);
+                        openCreateInteractionForPerson(person);
+                      }}
+                    />
+                  ))}
+                </ScrollView>
+                <View style={styles.confirmActions}>
+                  <Button
+                    label="Add person instead"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => {
+                      setInteractionPickerOpen(false);
+                      openCreatePerson("");
+                    }}
+                  />
+                  <Button
+                    label="Cancel"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => setInteractionPickerOpen(false)}
+                  />
+                </View>
+              </Card>
+            </View>
+          </View>
+        ) : null}
+
+
+{showPendingExternalReturn && pendingExternalAction ? (
+  <View style={styles.confirmOverlay}>
+    <Pressable style={styles.confirmBackdrop} onPress={keepWaitingOnExternalAction} />
+    <View style={styles.confirmCardWrap}>
+      <Card style={styles.confirmCard}>
+        <Typography variant="h2">Did you finish in {pendingExternalAction.destinationLabel}?</Typography>
+        <Typography variant="body" style={styles.confirmMeta}>
+          We paused your flow here so you can confirm before carrying on inside Blackbook.
+        </Typography>
+        <View style={styles.confirmActions}>
+          <Button
+            label="Not yet"
+            variant="ghost"
+            fullWidth={false}
+            size="compact"
+            onPress={keepWaitingOnExternalAction}
+          />
+          <Button
+            label="Yes, continue"
+            fullWidth={false}
+            size="compact"
+            onPress={() => {
+              void completeExternalActionFlow();
+            }}
+          />
+        </View>
+      </Card>
+    </View>
+  </View>
+) : null}
+
+        {draftPreviewPerson ? (
+          <View style={styles.confirmOverlay}>
+            <Pressable style={styles.confirmBackdrop} onPress={() => setDraftPreviewPerson(null)} />
+            <View style={styles.confirmCardWrap}>
+              <Card style={styles.confirmCard}>
+                <Typography variant="h2">Open WhatsApp draft?</Typography>
+                <Typography variant="body" style={styles.confirmMeta}>
+                  {draftPreviewPerson.name} · {draftPreviewPerson.phoneNumber}
+                </Typography>
+                <TextInput
+                  value={draftPreviewText}
+                  onChangeText={setDraftPreviewText}
+                  multiline
+                  placeholder="Edit your WhatsApp message before opening it"
+                  placeholderTextColor={colors.textTertiary}
+                  style={styles.draftEditorInput}
+                />
+                <View style={styles.confirmActions}>
+                  <Button
+                    label="Edit contact"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => {
+                      const person = draftPreviewPerson;
+                      setDraftPreviewPerson(null);
+                      openEditPerson(person);
+                    }}
+                  />
+                  <Button
+                    label="Cancel"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => setDraftPreviewPerson(null)}
+                  />
+                  <Button
+                    label="Open WhatsApp"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => {
+                      const person = draftPreviewPerson;
+                      const message = draftPreviewText;
+                      setDraftPreviewPerson(null);
+                      setDraftPreviewText("");
+                      void openDraftMessage(person, message);
+                    }}
+                  />
+                </View>
+              </Card>
+            </View>
+          </View>
+        ) : null}
+
+        {personActionMenu ? (
+          <View style={styles.confirmOverlay}>
+            <Pressable style={styles.confirmBackdrop} onPress={() => setPersonActionMenu(null)} />
+            <View style={styles.confirmCardWrap}>
+              <Card style={styles.confirmCard}>
+                <Typography variant="h2">Edit contact</Typography>
+                <Typography variant="body" style={styles.confirmMeta}>
+                  {personActionMenu.name}
+                </Typography>
+                <View style={styles.confirmActions}>
+                  <Button
+                    label="Edit details"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => {
+                      const person = personActionMenu;
+                      setPersonActionMenu(null);
+                      openEditPerson(person);
+                    }}
+                  />
+                  <Button
+                    label="Delete contact"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    loading={isDeleting}
+                    onPress={() => {
+                      const person = personActionMenu;
+                      setPersonActionMenu(null);
+                      handleDeletePerson(person);
+                    }}
+                  />
+                  <Button
+                    label="Cancel"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => setPersonActionMenu(null)}
+                  />
+                </View>
+              </Card>
+            </View>
+          </View>
+        ) : null}
+
+        {isCompactLayout ? (
+          <FloatingActionBar
+            actions={[
+              { label: "+", onPress: () => openCreatePerson(""), variant: "ghost" },
+              { label: selectedPerson ? "Add interaction" : "Pick contact", onPress: openCreateInteraction },
+            ]}
+          />
+        ) : null}
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  pendingExternalCard: {
+    gap: 12,
+    borderColor: colors.primaryAction,
+  },
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
@@ -692,18 +1262,30 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: layout.screenPaddingHorizontal,
     paddingTop: layout.stackGap,
-    paddingBottom: 56,
+    paddingBottom: 132,
     gap: 18,
   },
   headerRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "flex-start",
     justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: 12,
   },
   headerCopy: {
     flex: 1,
     gap: 8,
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  headerRowCompact: {
+    alignItems: "stretch",
+  },
+  headerActionButtonCompact: {
+    width: "100%",
   },
   controlRow: {
     flexDirection: "row",
@@ -736,13 +1318,148 @@ const styles = StyleSheet.create({
   featureBody: {
     color: colors.textSecondary,
   },
-  actionRow: {
+  featureMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+  },
+  metaDivider: {
+    color: colors.textTertiary,
+  },
+  inlineMetaAction: {
+    borderRadius: 999,
+  },
+  inlineMetaActionText: {
+    color: colors.primaryAction,
+    fontWeight: "600",
+  },
+  inlineMetaActionCaption: {
+    color: colors.primaryAction,
+  },
+  confirmOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 120,
+  },
+  confirmBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0, 0, 0, 0.28)",
+  },
+  confirmCardWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  confirmCard: {
+    width: "100%",
+    maxWidth: 520,
+    gap: 12,
+  },
+  confirmMeta: {
+    color: colors.textSecondary,
+  },
+  confirmPreview: {
+    color: colors.textPrimary,
+  },
+  draftEditorInput: {
+    minHeight: 120,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    color: colors.textPrimary,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    textAlignVertical: "top",
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  confirmActions: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
   },
-  armedDeleteButton: {
-    borderColor: colors.destructive,
+  pickerList: {
+    maxHeight: 260,
+  },
+  pickerListContent: {
+    gap: 8,
+  },
+  compactPersonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  compactPersonMain: {
+    flex: 1,
+    gap: 4,
+    minWidth: 0,
+  },
+  compactCompany: {
+    color: colors.textSecondary,
+  },
+  compactActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  iconButton: {
+    minWidth: 36,
+    minHeight: 36,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  expandButton: {
+    minWidth: 36,
+    minHeight: 36,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.primaryAction,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconButtonText: {
+    fontWeight: "700",
+  },
+  expandedPersonContent: {
+    marginTop: 14,
+    gap: 10,
+  },
+  compactExpandedActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  primaryActionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  secondaryActionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  tagPillRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  tagPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   featureNote: {
     color: colors.textSecondary,
@@ -785,7 +1502,7 @@ const styles = StyleSheet.create({
   },
   metaRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 12,
   },

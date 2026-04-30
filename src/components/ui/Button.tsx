@@ -61,7 +61,8 @@ export function Button({
           {leftIcon}
           <Typography
             variant="body"
-            style={primary ? styles.primaryLabel : styles.ghostLabel}
+            style={[styles.label, primary ? styles.primaryLabel : styles.ghostLabel]}
+            numberOfLines={1}
           >
             {label}
           </Typography>
@@ -73,9 +74,9 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: 54,
+    minHeight: layout.minTouchTarget,
     borderRadius: radius.button,
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -84,6 +85,7 @@ const styles = StyleSheet.create({
   compact: {
     minHeight: 38,
     paddingHorizontal: 14,
+    borderRadius: 14,
   },
   fullWidth: {
     width: "100%",
@@ -92,11 +94,20 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primaryAction,
     borderWidth: 1,
     borderColor: colors.primaryAction,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 2,
   },
   ghost: {
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  label: {
+    flexShrink: 1,
+    textAlign: "center",
   },
   primaryLabel: {
     color: colors.background,
@@ -108,6 +119,7 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.92,
+    transform: [{ scale: 0.99 }],
   },
   disabled: {
     opacity: 0.45,

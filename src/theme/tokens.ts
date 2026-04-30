@@ -5,24 +5,29 @@ export const colors = {
   background: "#F6F3EE",
   surface: "#FFFFFF",
   surfaceMuted: "#ECE7DE",
+  surfaceStrong: "#E2DBD1",
   border: "#D6D0C7",
   textPrimary: "#111111",
   textSecondary: "#5F5A52",
   textTertiary: "#8F897F",
   destructive: "#7F1D1D",
   success: "#202020",
+  successSoft: "#EAF8EE",
+  accentSoft: "#EFE9DF",
 } as const;
 
 export const spacing = {
   xs: 8,
-  sm: 16,
-  md: 24,
-  lg: 32,
+  sm: 12,
+  md: 16,
+  lg: 24,
+  xl: 32,
 } as const;
 
 export const radius = {
-  card: 24,
-  button: 999,
+  card: 22,
+  cardLg: 28,
+  button: 18,
   pill: 999,
 } as const;
 
@@ -54,13 +59,15 @@ export const typography = {
   caption: {
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: "500" as const,
+    fontWeight: "600" as const,
     letterSpacing: 1.1,
   },
 } as const;
 
 export const layout = {
-  screenPaddingHorizontal: spacing.md,
-  stackGap: spacing.sm,
+  screenPaddingHorizontal: spacing.lg,
+  stackGap: spacing.md,
+  sectionGap: spacing.lg,
   minTouchTarget: 48,
+  stickyBottomInset: 104,
 } as const;

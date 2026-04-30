@@ -62,7 +62,7 @@ export function FeedScreen() {
 							autoFocus
 						/>
 
-						<Button label="Save Interaction" onPress={() => setCaptureOpen(false)} />
+						<Button label="Save Update" onPress={() => setCaptureOpen(false)} />
 						<Button
 							label="Cancel"
 							variant="ghost"

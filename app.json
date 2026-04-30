@@ -3,6 +3,7 @@
     "name": "Blackbook Pulse",
     "slug": "personal-crm-mvp",
     "version": "1.0.0",
+    "scheme": "blackbookpulse",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -34,6 +35,34 @@
       "eas": {
         "projectId": "6504c040-f9cf-420c-9839-1322b892c1c6"
       }
-    }
+    },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Pulse to access your microphone."
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow Blackbook Pulse to open your calendar when you add follow-up reminders."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Pulse to access your camera.",
+          "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Pulse to access your photos to scan business cards and badges.",
+          "cameraPermission": "Allow Pulse to access your camera to scan business cards and badges."
+        }
+      ]
+    ]
   }
 }
