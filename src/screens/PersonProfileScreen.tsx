@@ -579,27 +579,20 @@ export function PersonProfileScreen({
 
   async function openWhatsAppOnWeb(browserUrl: string, personName: string) {
     if (typeof window === "undefined") {
-      await Linking.openURL(browserUrl);
       return;
     }
 
     try {
       const openedWindow = window.open(browserUrl, "_blank", "noopener,noreferrer");
-      if (openedWindow) {
-        openedWindow.opener = null;
-        return;
+      if (!openedWindow) {
+        Alert.alert("Open failed", `Your browser blocked opening WhatsApp Web for ${personName}. Please check your popup blocker settings.`);
       }
     } catch {
       // fall through to same-tab navigation
-    }
-
-    try {
-      window.location.assign(browserUrl);
-      return;
-    } catch {
-      Alert.alert("Open failed", `Could not open WhatsApp Web for ${personName}.`);
+      Alert.alert("Open failed", `Your browser blocked opening WhatsApp Web for ${personName}. Please check your popup blocker settings.`);
     }
   }
+
 
   async function openDraftMessage(person = selectedPerson, messageOverride?: string) {
     if (!person) {
