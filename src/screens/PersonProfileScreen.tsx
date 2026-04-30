@@ -984,7 +984,7 @@ export function PersonProfileScreen({
                     ) : null}
                   </>
                 ) : (
-                  <>
+                  <Pressable onPress={() => setSelectedPersonId(person.id)}>
                     <View style={styles.rowTop}>
                       <View style={styles.personCopy}>
                         <Typography variant="h2">{person.name}</Typography>
@@ -1001,17 +1001,17 @@ export function PersonProfileScreen({
                         size="compact"
                       />
                     </View>
-
                     <Typography variant="body" style={styles.noteText} numberOfLines={2}>
                       {person.lastInteractionNote}
                     </Typography>
 
                     <View style={styles.metaRow}>
+                      
                       <Typography variant="caption">{person.bannerLabel}</Typography>
                       {isContactStale(person.daysSinceLastContact, person.priority) ? <Typography variant="caption">Need a nudge</Typography> : null}
                       <Typography variant="caption">{person.interactionCount} notes</Typography>
                     </View>
-                  </>
+                    </Pressable>
                 )}
               </Card>
             ))}
