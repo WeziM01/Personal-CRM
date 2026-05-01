@@ -47,6 +47,20 @@ type EventScreenProps = {
   currentEvent: CurrentEventValue | null;
 };
 
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getRelativeDateInputValue(offsetDays: number) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + offsetDays);
+  return toDateInputValue(date);
+}
+
 export function EventScreen({ currentEvent }: EventScreenProps) {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 720;
@@ -57,8 +71,16 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
   const [isDeletingEvent, setDeletingEvent] = useState(false);
   const [deleteArmedEventId, setDeleteArmedEventId] = useState<string | null>(null);
   const [eventEditorMode, setEventEditorMode] = useState<"create" | "edit">("create");
-  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "", eventDate: "" });
+  const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "", eventDate: getRelativeDateInputValue(0) });
   const [captureInitialDraft, setCaptureInitialDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
+  const quickDateChoices = useMemo(
+    () => [
+      { label: "Yesterday", value: getRelativeDateInputValue(-1) },
+      { label: "Today", value: getRelativeDateInputValue(0) },
+      { label: "Tomorrow", value: getRelativeDateInputValue(1) },
+    ],
+    []
+  );
   const [captureLockedEvent, setCaptureLockedEvent] = useState<CurrentEventValue | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
   const [sortMode, setSortMode] = useState<SortMode>("recent");
@@ -187,7 +209,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name: currentEvent?.name || "",
       category: currentEvent?.category || "",
-      eventDate: "",
+      eventDate: getRelativeDateInputValue(0),
     });
     setEventEditorOpen(true);
   }
@@ -197,7 +219,7 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventDraft({
       name,
       category: currentEvent?.category || "",
-      eventDate: "",
+      eventDate: getRelativeDateInputValue(0),
     });
     setEventEditorOpen(true);
   }
@@ -624,10 +646,25 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                 <Typography variant="caption" style={styles.subSectionLabel}>
                   Event date
                 </Typography>
+                <Typography variant="body" style={styles.dateHelperText}>
+                  Defaults to today. Use a quick pick or type a different date if needed.
+                </Typography>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.datePillRow}>
+                  {quickDateChoices.map((option) => (
+                    <Button
+                      key={option.value}
+                      label={option.label}
+                      onPress={() => setEventDraft((current) => ({ ...current, eventDate: option.value }))}
+                      variant={eventDraft.eventDate === option.value ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  ))}
+                </ScrollView>
                 <TextInput
                   placeholder="2026-04-28"
                   placeholderTextColor={colors.textTertiary}
-                  style={styles.searchInput}
+                  style={[styles.searchInput, styles.dateInput]}
                   value={eventDraft.eventDate}
                   onChangeText={(value) => setEventDraft((current) => ({ ...current, eventDate: value }))}
                   autoCapitalize="none"
@@ -804,5 +841,18 @@ const styles = StyleSheet.create({
   addEventButton: {
     marginLeft: 8,
     minWidth: 110,
+  },
+  dateHelperText: {
+    marginTop: 4,
+    marginBottom: 8,
+    color: colors.textSecondary,
+  },
+  datePillRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingBottom: 12,
+  },
+  dateInput: {
+    marginTop: 0,
   },
 });
