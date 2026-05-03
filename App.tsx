@@ -19,8 +19,10 @@ import { useAuth } from "./src/hooks/useAuth";
 import { colors } from "./src/theme/tokens";
 
 type ScreenKey = "home" | "event" | "person";
+type TutorialStep = "setEvent" | "capture";
 
 const CURRENT_EVENT_STORAGE_KEY = "blackbook.current_event";
+const TUTORIAL_STORAGE_KEY = "blackbook.tutorial.core_flow";
 
 function formatCurrentEventChipLabel(event: CurrentEventValue | null) {
   if (!event) {
@@ -67,6 +69,7 @@ export default function App() {
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
   const [isEventWrapUpOpen, setEventWrapUpOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
+  const [tutorialStep, setTutorialStep] = useState<TutorialStep | null>(null);
   const welcomeName = getWelcomeName(activeUser, currentUsername);
 
   if (supabaseConfigMessage) {
@@ -163,6 +166,29 @@ useEffect(() => {
 
   void persistCurrentEvent();
 }, [currentEvent]);
+
+useEffect(() => {
+  let isMounted = true;
+
+  async function hydrateTutorial() {
+    if (!activeUser) {
+      return;
+    }
+
+    const seen = await AsyncStorage.getItem(TUTORIAL_STORAGE_KEY);
+    if (!isMounted || seen === "true") {
+      return;
+    }
+
+    setTutorialStep(currentEvent ? "capture" : "setEvent");
+  }
+
+  void hydrateTutorial();
+
+  return () => {
+    isMounted = false;
+  };
+}, [activeUser, currentEvent]);
 
   if (isLoading || isPreparingAccount) {
     return (
@@ -261,6 +287,28 @@ useEffect(() => {
     setEventWrapUpOpen(false);
   }
 
+  async function finishTutorial() {
+    setTutorialStep(null);
+    await AsyncStorage.setItem(TUTORIAL_STORAGE_KEY, "true");
+  }
+
+  function handleOpenTutorialEvent() {
+    setCurrentEventOpen(true);
+  }
+
+  function handleSaveCurrentEvent(value: CurrentEventValue) {
+    setCurrentEvent(value);
+    setCurrentEventOpen(false);
+    if (tutorialStep === "setEvent") {
+      setTutorialStep("capture");
+    }
+  }
+
+  function handleClearCurrentEvent() {
+    setCurrentEvent(null);
+    setCurrentEventOpen(false);
+  }
+
   function openAccountArea() {
     setNavMenuOpen(false);
     setAccountMenuOpen(true);
@@ -283,7 +331,7 @@ useEffect(() => {
                 variant="ghost"
                 fullWidth={false}
                 size="compact"
-                style={styles.compactHeaderButton}
+                style={[styles.compactHeaderButton, tutorialStep === "setEvent" ? styles.tutorialTarget : null]}
               />
               <Button
                 label="Menu"
@@ -324,7 +372,7 @@ useEffect(() => {
               variant="ghost"
               fullWidth={false}
               size="compact"
-              style={styles.currentEventButton}
+              style={[styles.currentEventButton, tutorialStep === "setEvent" ? styles.tutorialTarget : null]}
             />
             <Button
               label="Events"
@@ -386,10 +434,17 @@ useEffect(() => {
           <HomeScreen
             currentEvent={currentEvent}
             onOpenPeopleFilter={handleOpenPeopleFilter}
-            onRequestOpenCurrentEvent={() => setCurrentEventOpen(true)}
+            showCaptureCoach={tutorialStep === "capture"}
+            onCaptureCoachDone={() => void finishTutorial()}
           />
         ) : null}
-        {screen === "event" ? <EventScreen currentEvent={currentEvent} /> : null}
+        {screen === "event" ? (
+          <EventScreen
+            currentEvent={currentEvent}
+            onSetCurrentEvent={setCurrentEvent}
+            onEndCurrentEvent={exitCurrentEventMode}
+          />
+        ) : null}
         {screen === "person" ? (
           <PersonProfileScreen
             currentEvent={currentEvent}
@@ -403,14 +458,8 @@ useEffect(() => {
         visible={isCurrentEventOpen}
         value={currentEvent}
         onClose={() => setCurrentEventOpen(false)}
-        onSave={(value) => {
-          setCurrentEvent(value);
-          setCurrentEventOpen(false);
-        }}
-        onClear={() => {
-          setCurrentEvent(null);
-          setCurrentEventOpen(false);
-        }}
+        onSave={handleSaveCurrentEvent}
+        onClear={handleClearCurrentEvent}
       />
 
       <EventWrapUpSheet
@@ -419,6 +468,23 @@ useEffect(() => {
         onClose={() => setEventWrapUpOpen(false)}
         onExitEventMode={exitCurrentEventMode}
       />
+
+      {tutorialStep === "setEvent" ? (
+        <View pointerEvents="box-none" style={styles.tutorialOverlay}>
+          <View pointerEvents="none" style={styles.tutorialDim} />
+          <View style={styles.tutorialCard}>
+            <Typography variant="caption">First move</Typography>
+            <Typography variant="h2">Set the event you are at.</Typography>
+            <Typography variant="body" style={styles.tutorialText}>
+              New people you capture will carry this context automatically.
+            </Typography>
+            <View style={styles.tutorialActions}>
+              <Button label="Set current event" onPress={handleOpenTutorialEvent} fullWidth={false} size="compact" />
+              <Button label="Skip" onPress={() => void finishTutorial()} variant="ghost" fullWidth={false} size="compact" />
+            </View>
+          </View>
+        </View>
+      ) : null}
 
       <Modal visible={isAuthModalOpen} animationType="slide" presentationStyle="pageSheet">
         <AuthScreen
@@ -562,6 +628,44 @@ const styles = StyleSheet.create({
   },
   currentEventButton: {
     maxWidth: 170,
+  },
+  tutorialOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 150,
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 86,
+  },
+  tutorialDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.24)",
+  },
+  tutorialCard: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 16,
+    gap: 10,
+  },
+  tutorialText: {
+    color: colors.textSecondary,
+  },
+  tutorialActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  tutorialTarget: {
+    borderColor: "#19A64A",
+    shadowColor: "#19A64A",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
   },
   currentEventBar: {
     paddingHorizontal: 16,

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
@@ -27,23 +26,24 @@ import { PersonStatusMode } from "./PersonProfileScreen";
 type HomeScreenProps = {
   currentEvent: CurrentEventValue | null;
   onOpenPeopleFilter?: (status: PersonStatusMode) => void;
-  onRequestOpenCurrentEvent?: () => void;
+  showCaptureCoach?: boolean;
+  onCaptureCoachDone?: () => void;
 };
 
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
-const EVENT_ONBOARDING_KEY = "blackbook.onboarding.event";
-const CAPTURE_ONBOARDING_KEY = "blackbook.onboarding.capture";
-
-export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurrentEvent }: HomeScreenProps) {
+export function HomeScreen({
+  currentEvent,
+  onOpenPeopleFilter,
+  showCaptureCoach = false,
+  onCaptureCoachDone,
+}: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
-  const [showEventOnboarding, setShowEventOnboarding] = useState(false);
-  const [showCaptureOnboarding, setShowCaptureOnboarding] = useState(false);
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const dueTodayPeople = useMemo(
@@ -116,57 +116,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
     loadData();
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function syncOnboarding() {
-      const [eventSeen, captureSeen] = await AsyncStorage.multiGet([EVENT_ONBOARDING_KEY, CAPTURE_ONBOARDING_KEY]);
-
-      if (!isMounted) {
-        return;
-      }
-
-      const hasCurrentEvent = Boolean(currentEvent?.name);
-      setShowEventOnboarding(!hasCurrentEvent && eventSeen?.[1] !== "true");
-      setShowCaptureOnboarding(hasCurrentEvent && people.length === 0 && captureSeen?.[1] !== "true");
-    }
-
-    void syncOnboarding();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [currentEvent?.name, people.length]);
-
-  useEffect(() => {
-    if (!currentEvent?.name) {
-      return;
-    }
-
-    void AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
-    setShowEventOnboarding(false);
-  }, [currentEvent?.name]);
-
-  async function dismissEventOnboarding() {
-    setShowEventOnboarding(false);
-    await AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
-  }
-
-  async function dismissCaptureOnboarding() {
-    setShowCaptureOnboarding(false);
-    await AsyncStorage.setItem(CAPTURE_ONBOARDING_KEY, "true");
-  }
-
-  async function handleOpenCurrentEventOnboarding() {
-    await dismissEventOnboarding();
-    onRequestOpenCurrentEvent?.();
-  }
-
-  async function handleOpenCaptureOnboarding() {
-    await dismissCaptureOnboarding();
-    openCapture();
-  }
-
   async function handleSaveDraft(draft: ParsedPersonDraft) {
     if (isSaving) {
       return;
@@ -215,6 +164,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
   }
 
   function openCapture() {
+    onCaptureCoachDone?.();
     setCaptureOpen(true);
   }
 
@@ -279,34 +229,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
                   ? `${currentEventSummary.total} people added · ${currentEventSummary.outstanding} still need follow-up.`
                   : "Any person saved now will be attached to this event."}
               </Typography>
-            </Card>
-          ) : null}
-
-          {showEventOnboarding ? (
-            <Card style={styles.onboardingCard}>
-              <Typography variant="caption">Start here</Typography>
-              <Typography variant="h2">You are at an event right now.</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Set your current event first so every connection you capture carries the right context from the start.
-              </Typography>
-              <View style={styles.onboardingActions}>
-                <Button label="Set current event" onPress={() => void handleOpenCurrentEventOnboarding()} fullWidth={false} />
-                <Button label="Dismiss" onPress={() => void dismissEventOnboarding()} variant="ghost" fullWidth={false} />
-              </View>
-            </Card>
-          ) : null}
-
-          {showCaptureOnboarding ? (
-            <Card style={styles.onboardingCard}>
-              <Typography variant="caption">Next step</Typography>
-              <Typography variant="h2">Great. Who did you just meet?</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Capture your first connection from {currentEvent?.name || "this event"} and let the draft show the value instantly.
-              </Typography>
-              <View style={styles.onboardingActions}>
-                <Button label="Add connection" onPress={() => void handleOpenCaptureOnboarding()} fullWidth={false} />
-                <Button label="Dismiss" onPress={() => void dismissCaptureOnboarding()} variant="ghost" fullWidth={false} />
-              </View>
             </Card>
           ) : null}
 
@@ -403,7 +325,26 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
           </View>
         </ScrollView>
 
-        <FloatingFab label="+" onPress={openCapture} />
+        {showCaptureCoach ? (
+          <View pointerEvents="box-none" style={styles.captureCoachWrap}>
+            <View style={styles.captureCoachCard}>
+              <Typography variant="caption">Next</Typography>
+              <Typography variant="h2">Tap + when you meet someone.</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Capture the person now. Tidy the details later.
+              </Typography>
+              <View style={styles.onboardingActions}>
+                <Button label="Got it" onPress={onCaptureCoachDone || (() => undefined)} variant="ghost" fullWidth={false} size="compact" />
+              </View>
+            </View>
+          </View>
+        ) : null}
+
+        <FloatingFab
+          label="+"
+          onPress={openCapture}
+          style={showCaptureCoach ? styles.fabCoachTarget : null}
+        />
 
         <CaptureModal
           visible={isCaptureOpen}
@@ -457,10 +398,6 @@ const styles = StyleSheet.create({
   currentEventCard: {
     backgroundColor: colors.surface,
     gap: 10,
-  },
-  onboardingCard: {
-    gap: 12,
-    borderColor: colors.primaryAction,
   },
   onboardingActions: {
     flexDirection: "row",
@@ -587,6 +524,36 @@ const styles = StyleSheet.create({
   },
   cardBody: {
     color: colors.textSecondary,
+  },
+  captureCoachWrap: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    bottom: 100,
+    zIndex: 90,
+    alignItems: "flex-end",
+  },
+  captureCoachCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 14,
+    gap: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  fabCoachTarget: {
+    borderColor: "#19A64A",
+    shadowColor: "#19A64A",
+    shadowOpacity: 0.45,
+    shadowRadius: 22,
+    elevation: 12,
   },
   pulseRow: {
     flexDirection: "row",

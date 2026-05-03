@@ -98,7 +98,7 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
           <Card style={styles.heroCard}>
             <Typography variant="caption">Current mode</Typography>
             <Typography variant="body" style={styles.heroText}>
-              Set this once and every new person or interaction will automatically inherit the same event context until you switch back to past-event mode.
+              Set this once and every new person or interaction will automatically inherit the same event context until you end the event.
             </Typography>
           </Card>
 
