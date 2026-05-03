@@ -269,8 +269,8 @@ export function PersonQuickActionsButton({ person, onChanged }: PersonQuickActio
             <Typography variant="h2">{person.name}</Typography>
             <Button label="Mark contacted" onPress={() => void handleMarkContacted()} />
             <Button label="Draft follow-up" onPress={openDraft} variant="ghost" disabled={!contactMethods.length} />
-            <Button label="Set reminder" onPress={openReminder} variant="ghost" />
-            <Button label="View timeline" onPress={() => void openTimeline()} variant="ghost" />
+            <Button label="Remind me" onPress={openReminder} variant="ghost" />
+            <Button label="Timeline" onPress={() => void openTimeline()} variant="ghost" />
             <Button label="Close" onPress={closeMenu} variant="ghost" />
           </Card>
         </View>

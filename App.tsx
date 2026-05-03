@@ -5,6 +5,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
+import { EventWrapUpSheet } from "./src/components/EventWrapUpSheet";
+import { LiveEventBadge } from "./src/components/LiveEventBadge";
 import { formatCategoryLabel } from "./src/lib/crm";
 import { ensureProfileForUser, getCurrentUsername, signOutCurrentUser } from "./src/lib/auth";
 import { supabaseConfigMessage } from "./src/lib/supabase";
@@ -34,6 +36,19 @@ function formatCurrentEventChipLabel(event: CurrentEventValue | null) {
     : `Current: ${event.name} · ${typeLabel}`;
 }
 
+function getWelcomeName(user: NonNullable<ReturnType<typeof useAuth>["user"]> | null, username: string | null) {
+  const metadata = user?.user_metadata || {};
+  const candidate =
+    metadata.name ||
+    metadata.full_name ||
+    metadata.preferred_username ||
+    metadata.user_name ||
+    username ||
+    (typeof user?.email === "string" ? user.email.split("@")[0] : null);
+
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : "there";
+}
+
 export default function App() {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 880;
@@ -50,7 +65,9 @@ export default function App() {
   const [personStatusMode, setPersonStatusMode] = useState<PersonStatusMode>("all");
   const [personStatusNonce, setPersonStatusNonce] = useState(0);
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
+  const [isEventWrapUpOpen, setEventWrapUpOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
+  const welcomeName = getWelcomeName(activeUser, currentUsername);
 
   if (supabaseConfigMessage) {
     return (
@@ -239,6 +256,11 @@ useEffect(() => {
     }
   }
 
+  function exitCurrentEventMode() {
+    setCurrentEvent(null);
+    setEventWrapUpOpen(false);
+  }
+
   function openAccountArea() {
     setNavMenuOpen(false);
     setAccountMenuOpen(true);
@@ -251,7 +273,7 @@ useEffect(() => {
         >
           <View style={styles.compactTopRow}>
             <View style={styles.compactBrandWrap}>
-              <Typography variant="caption">Blackbook</Typography>
+              <Typography variant="caption">Welcome, {welcomeName}</Typography>
               <Typography variant="h2">{screen === "home" ? "Home" : screen === "event" ? "Events" : "People"}</Typography>
             </View>
             <View style={styles.compactTopActions}>
@@ -276,7 +298,8 @@ useEffect(() => {
         </View>
       ) : (
         <View style={styles.topBar}>
-          <View>
+          <View style={styles.brandCluster}>
+            <Typography variant="caption">Welcome, {welcomeName}</Typography>
             <Button
               label="Home"
               onPress={() => setScreen("home")}
@@ -333,6 +356,7 @@ useEffect(() => {
 
       {currentEvent ? (
         <View style={styles.currentEventBar}>
+          <LiveEventBadge eventDate={currentEvent.eventDate} />
           <Button
             label={formatCurrentEventChipLabel(currentEvent)}
             onPress={() => setCurrentEventOpen(true)}
@@ -341,8 +365,15 @@ useEffect(() => {
             size="compact"
           />
           <Button
-            label="Past Event Mode"
-            onPress={() => setCurrentEvent(null)}
+            label="Wrap up"
+            onPress={() => setEventWrapUpOpen(true)}
+            variant="primary"
+            fullWidth={false}
+            size="compact"
+          />
+          <Button
+            label="End event mode"
+            onPress={exitCurrentEventMode}
             variant="ghost"
             fullWidth={false}
             size="compact"
@@ -380,6 +411,13 @@ useEffect(() => {
           setCurrentEvent(null);
           setCurrentEventOpen(false);
         }}
+      />
+
+      <EventWrapUpSheet
+        visible={isEventWrapUpOpen}
+        event={currentEvent}
+        onClose={() => setEventWrapUpOpen(false)}
+        onExitEventMode={exitCurrentEventMode}
       />
 
       <Modal visible={isAuthModalOpen} animationType="slide" presentationStyle="pageSheet">
@@ -483,6 +521,9 @@ const styles = StyleSheet.create({
   switcher: {
     flexDirection: "row",
     gap: 8,
+  },
+  brandCluster: {
+    gap: 6,
   },
   switcherCompact: {
     flexWrap: "wrap",

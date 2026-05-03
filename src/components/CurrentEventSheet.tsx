@@ -174,7 +174,7 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
 
           <View style={styles.footerButtons}>
             <Button label={isCompactLayout ? "Save event" : "Save Current Event"} onPress={handleSave} disabled={!name.trim()} />
-            <Button label={isCompactLayout ? "Clear event" : "Past Event Mode"} onPress={onClear} variant="ghost" />
+            <Button label={isCompactLayout ? "Clear event" : "End event mode"} onPress={onClear} variant="ghost" />
           </View>
         </ScrollView>
       </SafeAreaView>
