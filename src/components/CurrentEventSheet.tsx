@@ -31,6 +31,20 @@ function formatCurrentEventType(value: CurrentEventValue | { category: EventCate
   return formatCategoryLabel(value.category);
 }
 
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getRelativeDateInputValue(offsetDays: number) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + offsetDays);
+  return toDateInputValue(date);
+}
+
 export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: CurrentEventSheetProps) {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 720;
@@ -60,6 +74,12 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
       customCategoryLabel: category === "other" ? customCategoryLabel.trim() || null : null,
     });
   }
+
+  const quickDateChoices = [
+    { label: "Yesterday", value: getRelativeDateInputValue(-1) },
+    { label: "Today", value: getRelativeDateInputValue(0) },
+    { label: "Tomorrow", value: getRelativeDateInputValue(1) },
+  ];
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
@@ -94,6 +114,18 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
             />
 
             <Typography variant="caption" style={styles.labelSpacing}>Event date</Typography>
+            <View style={styles.datePillRow}>
+              {quickDateChoices.map((option) => (
+                <Button
+                  key={option.value}
+                  label={option.label}
+                  onPress={() => setEventDate(option.value)}
+                  variant={eventDate === option.value ? "primary" : "ghost"}
+                  fullWidth={false}
+                  size="compact"
+                />
+              ))}
+            </View>
             <TextInput
               placeholder="2026-04-28"
               placeholderTextColor={colors.textTertiary}
@@ -194,6 +226,12 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   chipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 10,
+  },
+  datePillRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,

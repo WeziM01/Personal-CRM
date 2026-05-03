@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, AppState, Linking, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
+import * as Clipboard from "expo-clipboard";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingActionBar } from "../components/FloatingActionBar";
+import { PersonQuickActionsButton } from "../components/PersonQuickActionsButton";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -18,6 +20,7 @@ import {
   createPerson,
   deletePerson,
   ensureSessionUserId,
+  formatPreferredChannelLabel,
   getOrCreateEvent,
   listPeopleInsights,
   markPersonContactedToday,
@@ -31,6 +34,7 @@ import { clearPendingExternalAction, getPendingExternalAction, PendingExternalAc
 
 type SortMode = "recent" | "stale" | "name" | "frequency";
 type CaptureMode = "createInteraction" | "createPerson" | "edit";
+type DraftPreviewDestination = "whatsapp" | "linkedin";
 export type PersonStatusMode = "all" | "today" | "recent" | "stale";
 
 type PersonProfileScreenProps = {
@@ -62,6 +66,7 @@ export function PersonProfileScreen({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [draftPreviewPerson, setDraftPreviewPerson] = useState<(typeof people)[number] | null>(null);
   const [draftPreviewText, setDraftPreviewText] = useState("");
+  const [draftPreviewDestination, setDraftPreviewDestination] = useState<DraftPreviewDestination>("whatsapp");
   const [personActionMenu, setPersonActionMenu] = useState<(typeof people)[number] | null>(null);
   const [isInteractionPickerOpen, setInteractionPickerOpen] = useState(false);
   const [pendingExternalAction, setPendingExternalActionState] = useState<PendingExternalAction | null>(null);
@@ -249,6 +254,8 @@ export function PersonProfileScreen({
       linkedinUrl: person.linkedinUrl,
       email: person.email,
       phoneNumber: person.phoneNumber,
+      preferredChannel: person.preferredChannel,
+      preferredChannelOther: person.preferredChannelOther,
       event: person.lastEventName || "",
       whatMatters: "",
       nextStep: "",
@@ -322,6 +329,8 @@ export function PersonProfileScreen({
       linkedinUrl: person.linkedinUrl,
       email: person.email,
       phoneNumber: person.phoneNumber,
+      preferredChannel: person.preferredChannel,
+      preferredChannelOther: person.preferredChannelOther,
       event: person.lastEventName || "",
       whatMatters: person.whatMatters || person.lastInteractionNote,
       nextStep: person.nextStep || "",
@@ -356,6 +365,8 @@ export function PersonProfileScreen({
           linkedinUrl: draft.linkedinUrl,
           email: draft.email,
           phoneNumber: draft.phoneNumber,
+          preferredChannel: draft.preferredChannel,
+          preferredChannelOther: draft.preferredChannelOther,
         });
 
         let eventId: string | null = null;
@@ -413,6 +424,8 @@ export function PersonProfileScreen({
           linkedinUrl: draft.linkedinUrl,
           email: draft.email,
           phoneNumber: draft.phoneNumber,
+          preferredChannel: draft.preferredChannel,
+          preferredChannelOther: draft.preferredChannelOther,
           priority: draft.priority,
           tags: draft.tags,
         });
@@ -536,6 +549,20 @@ export function PersonProfileScreen({
     return `${count} logged ${count === 1 ? "moment" : "moments"}`;
   }
 
+  function renderPreferredChannelPill(person: (typeof people)[number], compact = false) {
+    if (!person.preferredChannel) {
+      return null;
+    }
+
+    return (
+      <View style={[styles.preferredChannelPill, compact ? styles.preferredChannelPillCompact : null]}>
+        <Typography variant="caption" style={styles.preferredChannelText}>
+          Prefers {formatPreferredChannelLabel(person.preferredChannel, person.preferredChannelOther)}
+        </Typography>
+      </View>
+    );
+  }
+
   async function handleAddToCalendar(person = selectedPerson) {
     if (!person) {
       return;
@@ -575,6 +602,180 @@ export function PersonProfileScreen({
       lastInteractionNote: person.lastInteractionNote,
       followUp: person.followUp,
     });
+  }
+
+  async function openEmailDraft(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    if (!person.email) {
+      Alert.alert("No email address", `Add an email address for ${person.name} before opening an email draft.`);
+      return;
+    }
+
+    const message = buildMessageForPerson(person);
+    const subject = person.lastEventName
+      ? `Following up from ${person.lastEventName}`
+      : `Following up with ${person.name}`;
+    const url = `mailto:${encodeURIComponent(person.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`;
+
+    try {
+      await markExternalActionStarted(`Email for ${person.name}`, message);
+      await Linking.openURL(url);
+    } catch {
+      await clearPendingExternalAction();
+      setPendingExternalActionState(null);
+      Alert.alert("Email draft failed", "Could not open your email app for this contact.");
+    }
+  }
+
+  async function openPhoneCall(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    if (!person.phoneNumber) {
+      Alert.alert("No phone number", `Add a phone number for ${person.name} before calling.`);
+      return;
+    }
+
+    try {
+      await markExternalActionStarted(`Phone for ${person.name}`);
+      await Linking.openURL(`tel:${person.phoneNumber}`);
+    } catch {
+      await clearPendingExternalAction();
+      setPendingExternalActionState(null);
+      Alert.alert("Call failed", "Could not open your phone app for this contact.");
+    }
+  }
+
+  function renderContactActionButtons(person: (typeof people)[number], compact = false) {
+    const actions = [
+      person.phoneNumber
+        ? {
+            channel: "whatsapp",
+            label: "WhatsApp Draft",
+            onPress: () => handleDraftMessage(person),
+          }
+        : null,
+      person.email
+        ? {
+            channel: "email",
+            label: "Email Draft",
+            onPress: () => {
+              void openEmailDraft(person);
+            },
+          }
+        : null,
+      person.phoneNumber
+        ? {
+            channel: "phone",
+            label: "Call",
+            onPress: () => {
+              void openPhoneCall(person);
+            },
+          }
+        : null,
+      person.linkedinUrl
+        ? {
+            channel: "linkedin",
+            label: "LinkedIn Draft",
+            onPress: () => handleLinkedInDraft(person),
+          }
+        : null,
+    ].filter(Boolean) as Array<{
+      channel: "whatsapp" | "email" | "phone" | "linkedin";
+      label: string;
+      onPress: () => void;
+    }>;
+
+    if (!actions.length) {
+      return null;
+    }
+
+    const preferredChannel = person.preferredChannel;
+    const action = preferredChannel
+      ? actions.find((item) => item.channel === preferredChannel)
+      : actions[0];
+
+    if (!action) {
+      return null;
+    }
+
+    return (
+      <View style={compact ? styles.compactExpandedActions : styles.primaryActionRow}>
+        <Button
+          label={action.label}
+          onPress={action.onPress}
+          variant="primary"
+          fullWidth={false}
+          size="compact"
+        />
+      </View>
+    );
+  }
+
+  function renderCompactPrimaryContactAction(person: (typeof people)[number]) {
+    const actions = [
+      person.phoneNumber
+        ? {
+            channel: "whatsapp",
+            label: "WA",
+            onPress: () => handleDraftMessage(person),
+          }
+        : null,
+      person.email
+        ? {
+            channel: "email",
+            label: "Email",
+            onPress: () => {
+              void openEmailDraft(person);
+            },
+          }
+        : null,
+      person.phoneNumber
+        ? {
+            channel: "phone",
+            label: "Call",
+            onPress: () => {
+              void openPhoneCall(person);
+            },
+          }
+        : null,
+      person.linkedinUrl
+        ? {
+            channel: "linkedin",
+            label: "in",
+            onPress: () => handleLinkedInDraft(person),
+          }
+        : null,
+    ].filter(Boolean) as Array<{
+      channel: "whatsapp" | "email" | "phone" | "linkedin";
+      label: string;
+      onPress: () => void;
+    }>;
+
+    if (!actions.length) {
+      return null;
+    }
+
+    const preferredChannel = person.preferredChannel;
+    const action = preferredChannel
+      ? actions.find((item) => item.channel === preferredChannel)
+      : actions[0];
+
+    if (!action) {
+      return null;
+    }
+
+    return (
+      <Pressable style={[styles.iconButton, styles.iconButtonPreferred]} onPress={action.onPress}>
+        <Typography variant="body" style={[styles.iconButtonText, styles.iconButtonTextPreferred]}>
+          {action.label}
+        </Typography>
+      </Pressable>
+    );
   }
 
   async function openWhatsAppOnWeb(browserUrl: string, personName: string) {
@@ -671,8 +872,39 @@ export function PersonProfileScreen({
       return;
     }
 
+    setDraftPreviewDestination("whatsapp");
     setDraftPreviewText(buildMessageForPerson(person));
     setDraftPreviewPerson(person);
+  }
+
+  function handleLinkedInDraft(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    if (!person.linkedinUrl) {
+      Alert.alert("No LinkedIn profile", `Add a LinkedIn URL for ${person.name} before opening a LinkedIn draft.`);
+      return;
+    }
+
+    setDraftPreviewDestination("linkedin");
+    setDraftPreviewText(buildMessageForPerson(person));
+    setDraftPreviewPerson(person);
+  }
+
+  async function copyLinkedInDraftAndOpen(person: (typeof people)[number], message: string) {
+    if (!person.linkedinUrl) {
+      Alert.alert("No LinkedIn profile", `Add a LinkedIn URL for ${person.name} before opening LinkedIn.`);
+      return;
+    }
+
+    try {
+      await Clipboard.setStringAsync(message);
+      Alert.alert("Message copied", "Your LinkedIn draft is copied to clipboard and ready to paste.");
+      await handleOpenExternal(person.linkedinUrl, `LinkedIn for ${person.name}`);
+    } catch {
+      Alert.alert("Copy failed", "Could not copy the draft message. Please try again.");
+    }
   }
 
   return (
@@ -841,8 +1073,13 @@ export function PersonProfileScreen({
 
           {!isCompactLayout && selectedPerson ? (
             <Card style={styles.featureCard}>
-              <Typography variant="caption">Selected contact</Typography>
-              <Typography variant="h1">{selectedPerson.name}</Typography>
+              <View style={styles.selectedContactHeader}>
+                <View style={styles.selectedContactTitle}>
+                  <Typography variant="caption">Selected contact</Typography>
+                  <Typography variant="h1">{selectedPerson.name}</Typography>
+                </View>
+                <PersonQuickActionsButton person={selectedPerson} onChanged={loadProfileData} />
+              </View>
               <View style={styles.featureMetaRow}>
                 <Typography variant="body" style={styles.featureBody}>
                   {selectedPerson.bannerLabel}
@@ -863,6 +1100,7 @@ export function PersonProfileScreen({
               {selectedPerson.company ? (
                 <Typography variant="caption">{selectedPerson.company}</Typography>
               ) : null}
+              {renderPreferredChannelPill(selectedPerson)}
               {selectedPerson.tags.length ? (
                 <View style={styles.tagPillRow}>
                   {selectedPerson.tags.map((tag) => (
@@ -874,18 +1112,7 @@ export function PersonProfileScreen({
               ) : null}
               {searchQuery ? <Typography variant="caption">Search: {searchQuery}</Typography> : null}
 
-              <View style={styles.primaryActionRow}>
-                <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(selectedPerson)} fullWidth={false} size="compact" />
-                {selectedPerson.linkedinUrl ? (
-                  <Button
-                    label="LinkedIn"
-                    onPress={() => handleOpenExternal(selectedPerson.linkedinUrl, `LinkedIn for ${selectedPerson.name}`)}
-                    variant="ghost"
-                    fullWidth={false}
-                    size="compact"
-                  />
-                ) : null}
-              </View>
+              {renderContactActionButtons(selectedPerson)}
 
               <View style={styles.secondaryActionRow}>
                 <Button
@@ -934,18 +1161,11 @@ export function PersonProfileScreen({
                         <Typography variant="body" style={styles.compactCompany} numberOfLines={1}>
                           {person.company || "No company"}
                         </Typography>
+                        {renderPreferredChannelPill(person, true)}
                       </View>
                       <View style={styles.compactActions}>
-                        {person.linkedinUrl ? (
-                          <Pressable style={styles.iconButton} onPress={() => handleOpenExternal(person.linkedinUrl)}>
-                            <Typography variant="body" style={styles.iconButtonText}>in</Typography>
-                          </Pressable>
-                        ) : null}
-                        {person.phoneNumber ? (
-                          <Pressable style={styles.iconButton} onPress={() => handleDraftMessage(person)}>
-                            <Typography variant="body" style={styles.iconButtonText}>WA</Typography>
-                          </Pressable>
-                        ) : null}
+                        {renderCompactPrimaryContactAction(person)}
+                        <PersonQuickActionsButton person={person} onChanged={loadProfileData} />
                         <Pressable style={styles.expandButton} onPress={() => handleToggleExpandedPerson(person.id)}>
                           <Typography variant="body" style={styles.iconButtonText}>
                             {selectedPersonId === person.id ? "v" : ">"}
@@ -969,13 +1189,9 @@ export function PersonProfileScreen({
                           {isContactStale(person.daysSinceLastContact, person.priority) ? <Typography variant="caption">Need a nudge</Typography> : null}
                           <Typography variant="caption">{getMomentLabel(person.interactionCount)}</Typography>
                         </View>
+                        {renderPreferredChannelPill(person)}
                         {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
-                        <View style={styles.compactExpandedActions}>
-                          <Button label="WhatsApp Draft" onPress={() => handleDraftMessage(person)} fullWidth={false} size="compact" />
-                          {person.linkedinUrl ? (
-                            <Button label="LinkedIn" onPress={() => handleOpenExternal(person.linkedinUrl)} variant="ghost" fullWidth={false} size="compact" />
-                          ) : null}
-                        </View>
+                        {renderContactActionButtons(person, true)}
                         <View style={styles.secondaryActionRow}>
                           <Button label="✓ Reached out" onPress={() => handleMarkContactedToday(person)} variant="ghost" fullWidth={false} size="compact" />
                           <Button label="Edit" onPress={() => setPersonActionMenu(person)} variant="ghost" fullWidth={false} size="compact" />
@@ -991,15 +1207,19 @@ export function PersonProfileScreen({
                         <Typography variant="caption">
                           {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                         </Typography>
+                        {renderPreferredChannelPill(person)}
                         {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                       </View>
-                      <Button
-                        label="Edit"
-                        onPress={() => setPersonActionMenu(person)}
-                        variant={person.id === selectedPerson?.id ? "primary" : "ghost"}
-                        fullWidth={false}
-                        size="compact"
-                      />
+                      <View style={styles.cardActionRow}>
+                        <Button
+                          label="Edit"
+                          onPress={() => setPersonActionMenu(person)}
+                          variant={person.id === selectedPerson?.id ? "primary" : "ghost"}
+                          fullWidth={false}
+                          size="compact"
+                        />
+                        <PersonQuickActionsButton person={person} onChanged={loadProfileData} />
+                      </View>
                     </View>
                     <Typography variant="body" style={styles.noteText} numberOfLines={2}>
                       {person.lastInteractionNote}
@@ -1131,15 +1351,21 @@ export function PersonProfileScreen({
             <Pressable style={styles.confirmBackdrop} onPress={() => setDraftPreviewPerson(null)} />
             <View style={styles.confirmCardWrap}>
               <Card style={styles.confirmCard}>
-                <Typography variant="h2">Open WhatsApp draft?</Typography>
+                <Typography variant="h2">
+                  {draftPreviewDestination === "linkedin" ? "LinkedIn draft" : "Open WhatsApp draft?"}
+                </Typography>
                 <Typography variant="body" style={styles.confirmMeta}>
-                  {draftPreviewPerson.name} · {draftPreviewPerson.phoneNumber}
+                  {draftPreviewPerson.name} · {draftPreviewDestination === "linkedin" ? "LinkedIn" : draftPreviewPerson.phoneNumber}
                 </Typography>
                 <TextInput
                   value={draftPreviewText}
                   onChangeText={setDraftPreviewText}
                   multiline
-                  placeholder="Edit your WhatsApp message before opening it"
+                  placeholder={
+                    draftPreviewDestination === "linkedin"
+                      ? "Edit your LinkedIn message before copying it"
+                      : "Edit your WhatsApp message before opening it"
+                  }
                   placeholderTextColor={colors.textTertiary}
                   style={styles.draftEditorInput}
                 />
@@ -1163,14 +1389,20 @@ export function PersonProfileScreen({
                     onPress={() => setDraftPreviewPerson(null)}
                   />
                   <Button
-                    label="Open WhatsApp"
+                    label={draftPreviewDestination === "linkedin" ? "Copy and open LinkedIn" : "Open WhatsApp"}
                     fullWidth={false}
                     size="compact"
                     onPress={() => {
                       const person = draftPreviewPerson;
                       const message = draftPreviewText;
+                      const destination = draftPreviewDestination;
                       setDraftPreviewPerson(null);
                       setDraftPreviewText("");
+                      if (destination === "linkedin") {
+                        void copyLinkedInDraftAndOpen(person, message);
+                        return;
+                      }
+
                       void openDraftMessage(person, message);
                     }}
                   />
@@ -1308,6 +1540,16 @@ const styles = StyleSheet.create({
     gap: 10,
     backgroundColor: colors.surfaceMuted,
   },
+  selectedContactHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  selectedContactTitle: {
+    flex: 1,
+    gap: 4,
+  },
   featureBody: {
     color: colors.textSecondary,
   },
@@ -1408,6 +1650,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  iconButtonPreferred: {
+    borderColor: colors.primaryAction,
+    backgroundColor: colors.primaryAction,
+  },
   expandButton: {
     minWidth: 36,
     minHeight: 36,
@@ -1421,6 +1667,9 @@ const styles = StyleSheet.create({
   },
   iconButtonText: {
     fontWeight: "700",
+  },
+  iconButtonTextPreferred: {
+    color: colors.background,
   },
   expandedPersonContent: {
     marginTop: 14,
@@ -1454,6 +1703,23 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
+  preferredChannelPill: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.primaryAction,
+    backgroundColor: colors.successSoft,
+  },
+  preferredChannelPillCompact: {
+    marginTop: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  preferredChannelText: {
+    color: colors.primaryAction,
+  },
   featureNote: {
     color: colors.textSecondary,
   },
@@ -1483,6 +1749,12 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-start",
     gap: 8,
+  },
+  cardActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
   },
   personCopy: {
     flex: 1,

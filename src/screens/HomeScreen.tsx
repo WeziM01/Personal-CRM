@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
+import { PersonQuickActionsButton } from "../components/PersonQuickActionsButton";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -267,8 +268,11 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
               {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
             </Typography>
           </View>
-          <View style={styles.statusPill}>
-            <Typography variant="caption" style={styles.statusPillText}>{person.statusLabel}</Typography>
+          <View style={styles.cardActions}>
+            <View style={styles.statusPill}>
+              <Typography variant="caption" style={styles.statusPillText}>{person.statusLabel}</Typography>
+            </View>
+            <PersonQuickActionsButton person={person} onChanged={loadData} />
           </View>
         </View>
         <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
@@ -681,6 +685,12 @@ const styles = StyleSheet.create({
   },
   statusPillText: {
     color: colors.textSecondary,
+  },
+  cardActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
   },
   cardBody: {
     color: colors.textSecondary,
