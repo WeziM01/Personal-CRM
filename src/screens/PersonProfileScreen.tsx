@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, AppState, Linking, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
+import { Alert, AppState, Linking, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
 import * as Clipboard from "expo-clipboard";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
@@ -21,9 +21,12 @@ import {
   deletePerson,
   ensureSessionUserId,
   formatPreferredChannelLabel,
+  formatFollowUpDate,
+  getPresetDate,
   getOrCreateEvent,
   listPeopleInsights,
   markPersonContactedToday,
+  parseDateOnlyString,
   updateInteraction,
   updatePersonDetails,
   isContactStale,
@@ -35,7 +38,25 @@ import { clearPendingExternalAction, getPendingExternalAction, PendingExternalAc
 type SortMode = "recent" | "stale" | "name" | "frequency";
 type CaptureMode = "createInteraction" | "createPerson" | "edit";
 type DraftPreviewDestination = "whatsapp" | "linkedin";
+type UpdateInteractionType = "met" | "called" | "emailed" | "messaged" | "followedUp" | "introduced";
+type UpdateStatus = "warm" | "needsAction" | "waiting" | "doneForNow";
 export type PersonStatusMode = "all" | "today" | "recent" | "stale";
+
+const interactionTypeOptions: Array<{ label: string; value: UpdateInteractionType }> = [
+  { label: "Met", value: "met" },
+  { label: "Called", value: "called" },
+  { label: "Emailed", value: "emailed" },
+  { label: "Messaged", value: "messaged" },
+  { label: "Followed up", value: "followedUp" },
+  { label: "Introduced", value: "introduced" },
+];
+
+const updateStatusOptions: Array<{ label: string; value: UpdateStatus }> = [
+  { label: "Warm", value: "warm" },
+  { label: "Needs action", value: "needsAction" },
+  { label: "Waiting", value: "waiting" },
+  { label: "Done for now", value: "doneForNow" },
+];
 
 type PersonProfileScreenProps = {
   currentEvent: CurrentEventValue | null;
@@ -55,6 +76,15 @@ export function PersonProfileScreen({
   const [isDeleting, setDeleting] = useState(false);
   const [editorMode, setEditorMode] = useState<CaptureMode>("createInteraction");
   const [editorDraft, setEditorDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
+  const [isUpdateModalOpen, setUpdateModalOpen] = useState(false);
+  const [updatePerson, setUpdatePerson] = useState<(typeof people)[number] | null>(null);
+  const [updateDraft, setUpdateDraft] = useState({
+    interactionType: "met" as UpdateInteractionType,
+    shortNote: "",
+    nextStep: "",
+    dueDate: "",
+    status: "warm" as UpdateStatus,
+  });
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("name");
@@ -244,44 +274,43 @@ export function PersonProfileScreen({
     setShowPendingExternalReturn(false);
   }
 
-  function openCreateInteractionForPerson(person: (typeof people)[number]) {
-    setEditorMode("createInteraction");
-    setEditorDraft({
-      name: person.name,
-      priority: person.priority,
-      tags: person.tags,
-      company: person.company,
-      linkedinUrl: person.linkedinUrl,
-      email: person.email,
-      phoneNumber: person.phoneNumber,
-      preferredChannel: person.preferredChannel,
-      preferredChannelOther: person.preferredChannelOther,
-      event: person.lastEventName || "",
-      whatMatters: "",
-      nextStep: "",
-      nextFollowUpAt: "",
-      followUpPreset: "",
-    });
-    setCaptureOpen(true);
+  function getDefaultUpdateStatus(person: (typeof people)[number]): UpdateStatus {
+    if (person.followUpState === "dueToday" || person.followUpState === "overdue") {
+      return "needsAction";
+    }
+
+    if (person.followUpState === "upcoming") {
+      return "waiting";
+    }
+
+    return "warm";
   }
 
-  function openCreateInteraction() {
+  function openLogUpdateForPerson(person: (typeof people)[number]) {
+    setSelectedPersonId(person.id);
+    setUpdatePerson(person);
+    setUpdateDraft({
+      interactionType: currentEvent ? "met" : "called",
+      shortNote: "",
+      nextStep: person.nextStep || "",
+      dueDate: person.nextFollowUpAt || "",
+      status: getDefaultUpdateStatus(person),
+    });
+    setUpdateModalOpen(true);
+  }
+
+  function openLogUpdate() {
     if (selectedPerson) {
-      openCreateInteractionForPerson(selectedPerson);
+      openLogUpdateForPerson(selectedPerson);
       return;
     }
 
-    if (isCompactLayout) {
-      if (!filteredPeople.length) {
-        openCreatePerson("");
-        return;
-      }
-
-      setInteractionPickerOpen(true);
+    if (!filteredPeople.length) {
+      openCreatePerson("");
       return;
     }
 
-    Alert.alert("Select a contact first", "No contact is selected yet.");
+    setInteractionPickerOpen(true);
   }
 
   function openCreatePerson(initialName = searchQuery.trim()) {
@@ -338,6 +367,76 @@ export function PersonProfileScreen({
       followUpPreset: "",
     });
     setCaptureOpen(true);
+  }
+
+  function getInteractionTypeLabel(value: UpdateInteractionType) {
+    return interactionTypeOptions.find((option) => option.value === value)?.label || "Update";
+  }
+
+  function getStatusLabel(value: UpdateStatus) {
+    return updateStatusOptions.find((option) => option.value === value)?.label || "Warm";
+  }
+
+  function buildUpdateRecord() {
+    const lines = [
+      `Update type: ${getInteractionTypeLabel(updateDraft.interactionType)}`,
+      updateDraft.shortNote.trim(),
+      `Status: ${getStatusLabel(updateDraft.status)}`,
+    ];
+
+    if (updateDraft.nextStep.trim()) {
+      lines.push(`Next step: ${updateDraft.nextStep.trim()}`);
+    }
+
+    if (updateDraft.dueDate.trim()) {
+      lines.push(`Follow up date: ${updateDraft.dueDate.trim()}`);
+    }
+
+    return lines.filter(Boolean).join("\n");
+  }
+
+  async function handleSaveUpdate() {
+    if (!updatePerson || isSaving) {
+      return;
+    }
+
+    if (!updateDraft.shortNote.trim()) {
+      Alert.alert("Short note required", "Add a 1-2 line note so this update is useful later.");
+      return;
+    }
+
+    if (updateDraft.dueDate.trim() && !parseDateOnlyString(updateDraft.dueDate.trim())) {
+      Alert.alert("Invalid date", "Use YYYY-MM-DD for the due date.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const userId = await ensureSessionUserId();
+      let eventId: string | null = null;
+
+      if (currentEvent?.name) {
+        const event = await getOrCreateEvent(userId, currentEvent.name, currentEvent.category, currentEvent.eventDate || null);
+        eventId = event.id;
+      }
+
+      await createInteraction({
+        userId,
+        personId: updatePerson.id,
+        eventId,
+        rawNote: buildUpdateRecord(),
+      });
+
+      setUpdateModalOpen(false);
+      setUpdatePerson(null);
+      await loadProfileData();
+      Alert.alert("Update logged", `${updatePerson.name}'s timeline has been updated.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to log update.";
+      Alert.alert("Save failed", message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleSaveInteraction(draft: ParsedPersonDraft) {
@@ -919,7 +1018,7 @@ export function PersonProfileScreen({
             {!isCompactLayout ? (
               <View style={styles.headerActions}>
                 <Button label="Add person" onPress={() => openCreatePerson("")} variant="ghost" fullWidth={false} />
-                <Button label="Add interaction" onPress={openCreateInteraction} fullWidth={false} />
+                <Button label="Log update" onPress={openLogUpdate} fullWidth={false} />
               </View>
             ) : null}
           </View>
@@ -1265,14 +1364,151 @@ export function PersonProfileScreen({
           showQuickCapture={editorMode === "createPerson"}
         />
 
+        <Modal visible={isUpdateModalOpen} animationType="slide" presentationStyle="pageSheet">
+          <SafeAreaView style={styles.safeArea}>
+            <View style={styles.updateModalContainer}>
+              <View style={styles.headerRow}>
+                <View style={styles.headerCopy}>
+                  <Typography variant="caption">Log update</Typography>
+                  <Typography variant="h1">{updatePerson?.name || "Select contact"}</Typography>
+                  <Typography variant="body" style={styles.confirmMeta}>
+                    Capture what happened, what changed, and what needs doing next.
+                  </Typography>
+                </View>
+                <Button
+                  label="Close"
+                  onPress={() => {
+                    setUpdateModalOpen(false);
+                    setUpdatePerson(null);
+                  }}
+                  variant="ghost"
+                  fullWidth={false}
+                  size="compact"
+                />
+              </View>
+
+              <ScrollView
+                style={styles.updateModalScroll}
+                contentContainerStyle={styles.updateModalContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <Card style={styles.updateCard}>
+                  <Typography variant="caption">Interaction type</Typography>
+                  <View style={styles.controlRow}>
+                    {interactionTypeOptions.map((option) => (
+                      <Button
+                        key={option.value}
+                        label={option.label}
+                        onPress={() => setUpdateDraft((current) => ({ ...current, interactionType: option.value }))}
+                        variant={updateDraft.interactionType === option.value ? "primary" : "ghost"}
+                        fullWidth={false}
+                        size="compact"
+                      />
+                    ))}
+                  </View>
+                </Card>
+
+                <Card style={styles.updateCard}>
+                  <Typography variant="caption">Short note</Typography>
+                  <TextInput
+                    value={updateDraft.shortNote}
+                    onChangeText={(value) => setUpdateDraft((current) => ({ ...current, shortNote: value }))}
+                    placeholder="1-2 lines: what happened?"
+                    placeholderTextColor={colors.textTertiary}
+                    style={[styles.updateInput, styles.updateTextArea]}
+                    multiline
+                    autoFocus
+                  />
+
+                  <Typography variant="caption" style={styles.subSectionLabel}>Next steps</Typography>
+                  <TextInput
+                    value={updateDraft.nextStep}
+                    onChangeText={(value) => setUpdateDraft((current) => ({ ...current, nextStep: value }))}
+                    placeholder="What do you need to do next?"
+                    placeholderTextColor={colors.textTertiary}
+                    style={[styles.updateInput, styles.updateTextArea]}
+                    multiline
+                  />
+                </Card>
+
+                <Card style={styles.updateCard}>
+                  <Typography variant="caption">Due date</Typography>
+                  <View style={styles.controlRow}>
+                    <Button
+                      label="Tomorrow"
+                      onPress={() => setUpdateDraft((current) => ({ ...current, dueDate: getPresetDate("tomorrow") }))}
+                      variant={updateDraft.dueDate === getPresetDate("tomorrow") ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                    <Button
+                      label="In 3 days"
+                      onPress={() => setUpdateDraft((current) => ({ ...current, dueDate: getPresetDate("in3days") }))}
+                      variant={updateDraft.dueDate === getPresetDate("in3days") ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                    <Button
+                      label="Next week"
+                      onPress={() => setUpdateDraft((current) => ({ ...current, dueDate: getPresetDate("nextWeek") }))}
+                      variant={updateDraft.dueDate === getPresetDate("nextWeek") ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  </View>
+                  <TextInput
+                    value={updateDraft.dueDate}
+                    onChangeText={(value) => setUpdateDraft((current) => ({ ...current, dueDate: value }))}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={colors.textTertiary}
+                    style={styles.updateInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {updateDraft.dueDate.trim() && parseDateOnlyString(updateDraft.dueDate.trim()) ? (
+                    <Typography variant="caption" style={styles.confirmMeta}>
+                      Due {formatFollowUpDate(updateDraft.dueDate.trim())}
+                    </Typography>
+                  ) : null}
+                </Card>
+
+                <Card style={styles.updateCard}>
+                  <Typography variant="caption">Latest status</Typography>
+                  <View style={styles.controlRow}>
+                    {updateStatusOptions.map((option) => (
+                      <Button
+                        key={option.value}
+                        label={option.label}
+                        onPress={() => setUpdateDraft((current) => ({ ...current, status: option.value }))}
+                        variant={updateDraft.status === option.value ? "primary" : "ghost"}
+                        fullWidth={false}
+                        size="compact"
+                      />
+                    ))}
+                  </View>
+                </Card>
+              </ScrollView>
+
+              <View style={styles.updateFooter}>
+                <Button
+                  label="Save update"
+                  onPress={() => void handleSaveUpdate()}
+                  loading={isSaving}
+                  disabled={!updatePerson || !updateDraft.shortNote.trim()}
+                />
+              </View>
+            </View>
+          </SafeAreaView>
+        </Modal>
+
         {isInteractionPickerOpen ? (
           <View style={styles.confirmOverlay}>
             <Pressable style={styles.confirmBackdrop} onPress={() => setInteractionPickerOpen(false)} />
             <View style={styles.confirmCardWrap}>
               <Card style={styles.confirmCard}>
-                <Typography variant="h2">Pick a contact</Typography>
+                <Typography variant="h2">Log update</Typography>
                 <Typography variant="body" style={styles.confirmMeta}>
-                  Choose who this interaction should be saved against.
+                  Choose who this update belongs to.
                 </Typography>
                 <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
                   {filteredPeople.map((person) => (
@@ -1285,7 +1521,7 @@ export function PersonProfileScreen({
                       onPress={() => {
                         setSelectedPersonId(person.id);
                         setInteractionPickerOpen(false);
-                        openCreateInteractionForPerson(person);
+                        openLogUpdateForPerson(person);
                       }}
                     />
                   ))}
@@ -1462,7 +1698,7 @@ export function PersonProfileScreen({
           <FloatingActionBar
             actions={[
               { label: "+", onPress: () => openCreatePerson(""), variant: "ghost" },
-              { label: selectedPerson ? "Add interaction" : "Pick contact", onPress: openCreateInteraction },
+              { label: "Log update", onPress: openLogUpdate },
             ]}
           />
         ) : null}
@@ -1596,6 +1832,46 @@ const styles = StyleSheet.create({
   },
   confirmPreview: {
     color: colors.textPrimary,
+  },
+  updateModalContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingHorizontal: layout.screenPaddingHorizontal,
+    paddingTop: layout.stackGap,
+  },
+  updateModalScroll: {
+    flex: 1,
+  },
+  updateModalContent: {
+    paddingTop: 18,
+    paddingBottom: 18,
+    gap: 14,
+  },
+  updateCard: {
+    gap: 12,
+  },
+  updateInput: {
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    color: colors.textPrimary,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  updateTextArea: {
+    minHeight: 86,
+    textAlignVertical: "top",
+  },
+  updateFooter: {
+    paddingTop: 12,
+    paddingBottom: 18,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
   },
   draftEditorInput: {
     minHeight: 120,

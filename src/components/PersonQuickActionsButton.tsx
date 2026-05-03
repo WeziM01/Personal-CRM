@@ -55,9 +55,24 @@ function getContactMethods(person: PersonInsight) {
 function toTimelineLabel(rawNote: string, eventName?: string | null) {
   const firstLine = rawNote.split(/\r?\n/).find((line) => line.trim())?.trim() || "Note added";
   const followUpDate = extractFollowUpDate(rawNote);
+  const updateTypeMatch = rawNote.match(/^Update type:\s*(.+)$/im);
+  const updateNote = rawNote
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) =>
+      line &&
+      !/^Update type:/i.test(line) &&
+      !/^Status:/i.test(line) &&
+      !/^Next step:/i.test(line) &&
+      !/^Follow up date:/i.test(line)
+    );
 
   if (/^Contacted today\.?$/i.test(firstLine)) {
     return "Marked contacted";
+  }
+
+  if (updateTypeMatch?.[1]) {
+    return `${updateTypeMatch[1].trim()}: ${updateNote || "Update logged"}`.slice(0, 120);
   }
 
   if (/^Reminder set\.?$/i.test(firstLine) || followUpDate) {
