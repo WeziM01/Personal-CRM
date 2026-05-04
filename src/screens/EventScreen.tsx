@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Modal,
-  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -12,16 +11,12 @@ import {
 } from "react-native";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
-import { FloatingActionBar } from "../components/FloatingActionBar";
-import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
+import { LiveEventBadge } from "../components/LiveEventBadge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
 import {
   EVENT_CATEGORY_OPTIONS,
-  buildInteractionRecord,
-  createInteraction,
-  createPerson,
   deleteEvent,
   ensureSessionUserId,
   formatCategoryLabel,
@@ -45,6 +40,8 @@ type EventEditorDraft = {
 
 type EventScreenProps = {
   currentEvent: CurrentEventValue | null;
+  onSetCurrentEvent?: (event: CurrentEventValue) => void;
+  onEndCurrentEvent?: () => void;
 };
 
 function toDateInputValue(date: Date) {
@@ -61,18 +58,15 @@ function getRelativeDateInputValue(offsetDays: number) {
   return toDateInputValue(date);
 }
 
-export function EventScreen({ currentEvent }: EventScreenProps) {
+export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent }: EventScreenProps) {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 720;
-  const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isEventEditorOpen, setEventEditorOpen] = useState(false);
-  const [isSaving, setSaving] = useState(false);
   const [isSavingEvent, setSavingEvent] = useState(false);
   const [isDeletingEvent, setDeletingEvent] = useState(false);
   const [deleteArmedEventId, setDeleteArmedEventId] = useState<string | null>(null);
   const [eventEditorMode, setEventEditorMode] = useState<"create" | "edit">("create");
   const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "", eventDate: getRelativeDateInputValue(0) });
-  const [captureInitialDraft, setCaptureInitialDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const quickDateChoices = useMemo(
     () => [
       { label: "Yesterday", value: getRelativeDateInputValue(-1) },
@@ -81,7 +75,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     ],
     []
   );
-  const [captureLockedEvent, setCaptureLockedEvent] = useState<CurrentEventValue | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
   const [sortMode, setSortMode] = useState<SortMode>("recent");
   const [searchQuery, setSearchQuery] = useState("");
@@ -124,35 +117,98 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     return filteredEvents.find((event) => event.id === selectedEventId) || filteredEvents[0] || null;
   }, [filteredEvents, selectedEventId]);
 
-  const filteredPeople = useMemo(() => {
-    const matching = people.filter((person) => {
-      if (selectedEvent) {
-        return interactions.some(
-          (interaction) => interaction.event_id === selectedEvent.id && interaction.person_id === person.id
-        );
+  const eventSummaryById = useMemo(() => {
+    const personById = new Map(people.map((person) => [person.id, person]));
+    const peopleByEventId = new Map<string, Set<string>>();
+
+    interactions.forEach((interaction) => {
+      if (!interaction.event_id || !interaction.person_id) {
+        return;
       }
 
-      return selectedCategory === "all" || person.lastEventCategory === selectedCategory;
+      const current = peopleByEventId.get(interaction.event_id) || new Set<string>();
+      current.add(interaction.person_id);
+      peopleByEventId.set(interaction.event_id, current);
     });
 
-    return matching.sort((left, right) => {
-      if (sortMode === "name") {
-        return left.name.localeCompare(right.name);
+    const summaries = new Map<
+      string,
+      { peopleCount: number; dueToday: number; overdue: number; upcoming: number; followUpsDue: number }
+    >();
+
+    events.forEach((event) => {
+      const personIds = peopleByEventId.get(event.id) || new Set<string>();
+      let dueToday = 0;
+      let overdue = 0;
+      let upcoming = 0;
+
+      personIds.forEach((personId) => {
+        const person = personById.get(personId);
+        if (person?.followUpState === "dueToday") {
+          dueToday += 1;
+        }
+        if (person?.followUpState === "overdue") {
+          overdue += 1;
+        }
+        if (person?.followUpState === "upcoming") {
+          upcoming += 1;
+        }
+      });
+
+      summaries.set(event.id, {
+        peopleCount: personIds.size || event.peopleCount,
+        dueToday,
+        overdue,
+        upcoming,
+        followUpsDue: dueToday + overdue,
+      });
+    });
+
+    return summaries;
+  }, [events, interactions, people]);
+
+  const selectedEventFollowUpSummary = selectedEvent
+    ? eventSummaryById.get(selectedEvent.id) || {
+        peopleCount: selectedEvent.peopleCount,
+        dueToday: 0,
+        overdue: 0,
+        upcoming: 0,
+        followUpsDue: 0,
       }
+    : null;
 
-      const leftValue = left.lastInteractionAt || left.createdAt;
-      const rightValue = right.lastInteractionAt || right.createdAt;
-      return rightValue.localeCompare(leftValue);
-    });
-  }, [interactions, people, selectedCategory, selectedEvent, sortMode]);
+  const currentEventInsight = useMemo(() => {
+    if (!currentEvent) {
+      return null;
+    }
 
-  const selectedEventFollowUpSummary = useMemo(() => {
+    const currentName = currentEvent.name.trim().toLowerCase();
+    return events.find((event) => event.name.trim().toLowerCase() === currentName) || null;
+  }, [currentEvent, events]);
+
+  const currentEventSummary = useMemo(() => {
+    if (!currentEvent) {
+      return { peopleCount: 0, followUpsDue: 0 };
+    }
+
+    if (currentEventInsight) {
+      const summary = eventSummaryById.get(currentEventInsight.id);
+      return {
+        peopleCount: summary?.peopleCount || currentEventInsight.peopleCount,
+        followUpsDue: summary?.followUpsDue || 0,
+      };
+    }
+
+    const currentName = currentEvent.name.trim().toLowerCase();
+    const matchingPeople = people.filter((person) => person.lastEventName?.trim().toLowerCase() === currentName);
+
     return {
-      dueToday: filteredPeople.filter((person) => person.followUpState === "dueToday").length,
-      overdue: filteredPeople.filter((person) => person.followUpState === "overdue").length,
-      upcoming: filteredPeople.filter((person) => person.followUpState === "upcoming").length,
+      peopleCount: matchingPeople.length,
+      followUpsDue: matchingPeople.filter(
+        (person) => person.followUpState === "dueToday" || person.followUpState === "overdue"
+      ).length,
     };
-  }, [filteredPeople]);
+  }, [currentEvent, currentEventInsight, eventSummaryById, people]);
 
   const groupedEvents = useMemo(() => {
     const groups = new Map<string, typeof filteredEvents>();
@@ -224,38 +280,19 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     setEventEditorOpen(true);
   }
 
-  function openEditEvent() {
-    if (!selectedEvent) {
+  function openEditEvent(targetEvent = selectedEvent) {
+    if (!targetEvent) {
       return;
     }
 
     setEventEditorMode("edit");
+    setSelectedEventId(targetEvent.id);
     setEventDraft({
-      name: selectedEvent.name,
-      category: selectedEvent.category,
-      eventDate: selectedEvent.eventDate || "",
+      name: targetEvent.name,
+      category: targetEvent.category,
+      eventDate: targetEvent.eventDate || "",
     });
     setEventEditorOpen(true);
-  }
-
-  function openGeneralCapture() {
-    setCaptureInitialDraft(null);
-    setCaptureLockedEvent(currentEvent);
-    setCaptureOpen(true);
-  }
-
-  function openSelectedEventCapture() {
-    if (!selectedEvent) {
-      openGeneralCapture();
-      return;
-    }
-
-    setCaptureInitialDraft({
-      event: selectedEvent.name,
-      eventCategory: selectedEvent.category,
-    });
-    setCaptureLockedEvent(currentEvent || { name: selectedEvent.name, category: selectedEvent.category });
-    setCaptureOpen(true);
   }
 
   async function handleSaveEvent() {
@@ -299,22 +336,46 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     }
   }
 
-  async function handleDeleteEvent() {
-    if (!selectedEvent) {
+  function isCurrentEvent(event: (typeof events)[number]) {
+    return currentEvent?.name.trim().toLowerCase() === event.name.trim().toLowerCase();
+  }
+
+  function handleSetCurrentEvent(event: (typeof events)[number]) {
+    onSetCurrentEvent?.({
+      name: event.name,
+      category: event.category,
+      eventDate: event.eventDate,
+    });
+  }
+
+  function handleCurrentEventToggle(event: (typeof events)[number]) {
+    if (isCurrentEvent(event)) {
+      onEndCurrentEvent?.();
       return;
     }
 
-    if (deleteArmedEventId !== selectedEvent.id) {
-      setDeleteArmedEventId(selectedEvent.id);
+    handleSetCurrentEvent(event);
+  }
+
+  async function handleDeleteEvent(targetEvent = selectedEvent) {
+    if (!targetEvent) {
+      return;
+    }
+
+    if (deleteArmedEventId !== targetEvent.id) {
+      setDeleteArmedEventId(targetEvent.id);
       return;
     }
 
     try {
       setDeletingEvent(true);
       const userId = await ensureSessionUserId();
-      await deleteEvent(userId, selectedEvent.id);
+      await deleteEvent(userId, targetEvent.id);
+      if (isCurrentEvent(targetEvent)) {
+        onEndCurrentEvent?.();
+      }
       await loadEventData();
-      Alert.alert("Deleted", `${selectedEvent.name} removed. Existing interactions keep their notes.`);
+      Alert.alert("Deleted", `${targetEvent.name} removed. Existing interactions keep their notes.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to delete event.";
       Alert.alert("Delete failed", message);
@@ -346,58 +407,6 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
     }
   }
 
-  async function handleSaveDraft(draft: ParsedPersonDraft) {
-    if (isSaving) {
-      return;
-    }
-
-    try {
-      setSaving(true);
-      const userId = await ensureSessionUserId();
-      const person = await createPerson(
-        userId,
-        draft.name,
-        draft.company,
-        draft.linkedinUrl,
-        draft.email,
-        draft.phoneNumber,
-        draft.preferredChannel,
-        draft.preferredChannelOther,
-        draft.priority,
-        draft.tags
-      );
-      let linkedEventId: string | null = null;
-      const eventName = currentEvent?.name || draft.event;
-      const eventCategory = currentEvent?.category || draft.eventCategory || null;
-      let linkedEventName = eventName;
-
-      if (eventName && eventName !== "No event") {
-        const draftEvent = await getOrCreateEvent(userId, eventName, eventCategory, null);
-        linkedEventId = draftEvent.id;
-        linkedEventName = draftEvent.name;
-      }
-
-      await createInteraction({
-        userId,
-        personId: person.id,
-        eventId: linkedEventId,
-        rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
-      });
-
-      setCaptureOpen(false);
-  setCaptureInitialDraft(null);
-  setCaptureLockedEvent(null);
-      await loadEventData();
-
-      Alert.alert("Saved", `${draft.name} saved with event: ${linkedEventName || "No event"}.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to save event interaction.";
-      Alert.alert("Save failed", message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
@@ -414,6 +423,36 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               style={styles.addEventButton}
             />
           </View>
+
+          {currentEvent ? (
+            <Card style={styles.currentEventCard}>
+              <View style={styles.eventHeader}>
+                <LiveEventBadge eventDate={currentEvent.eventDate} />
+                <Typography variant="caption">
+                  {currentEvent.eventDate ? formatEventDate(currentEvent.eventDate) : "No date set"}
+                </Typography>
+              </View>
+              <Typography variant="h2">Current event: {currentEvent.name}</Typography>
+              <Typography variant="body" style={styles.secondaryText}>
+                {currentEventSummary.peopleCount} people added · {currentEventSummary.followUpsDue} follow-ups due
+              </Typography>
+              <View style={styles.featureActions}>
+                <Button
+                  label="View event"
+                  onPress={() => {
+                    if (currentEventInsight) {
+                      setSelectedEventId(currentEventInsight.id);
+                      return;
+                    }
+                    openCreateEventWithName(currentEvent.name);
+                  }}
+                  fullWidth={false}
+                  size="compact"
+                />
+                <Button label="End event" onPress={() => onEndCurrentEvent?.()} variant="ghost" fullWidth={false} size="compact" />
+              </View>
+            </Card>
+          ) : null}
 
           <Card>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
@@ -485,21 +524,22 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                 {selectedEvent.eventDate ? ` · ${formatEventDate(selectedEvent.eventDate)}` : ""}
                 {` · ${selectedEvent.interactionCount} notes · ${selectedEvent.peopleCount} people`}
               </Typography>
-              <Typography variant="caption">
-                Due today {selectedEventFollowUpSummary.dueToday} · Overdue {selectedEventFollowUpSummary.overdue} · Upcoming {selectedEventFollowUpSummary.upcoming}
-              </Typography>
-              <Typography variant="caption">{selectedEvent.lastConnectedLabel}</Typography>
+              {selectedEventFollowUpSummary ? (
+                <Typography variant="caption">
+                  Due today {selectedEventFollowUpSummary.dueToday} · Overdue {selectedEventFollowUpSummary.overdue} · Upcoming {selectedEventFollowUpSummary.upcoming}
+                </Typography>
+              ) : null}
               <View style={styles.featureActions}>
                 <Button
-                  label="Log contact"
-                  onPress={openSelectedEventCapture}
+                  label={isCurrentEvent(selectedEvent) ? "End event" : "Set current"}
+                  onPress={() => handleCurrentEventToggle(selectedEvent)}
                   fullWidth={false}
                   size="compact"
                 />
-                <Button label="Edit" onPress={openEditEvent} variant="ghost" fullWidth={false} size="compact" />
+                <Button label="Edit" onPress={() => openEditEvent()} variant="ghost" fullWidth={false} size="compact" />
                 <Button
                   label={deleteArmedEventId === selectedEvent.id ? "Delete now" : "Delete"}
-                  onPress={handleDeleteEvent}
+                  onPress={() => void handleDeleteEvent(selectedEvent)}
                   variant="ghost"
                   fullWidth={false}
                   size="compact"
@@ -516,9 +556,18 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
           <View style={styles.peopleStack}>
             {groupedEvents.map((group) => (
               <View key={group.category} style={styles.groupSection}>
-                {group.items.map((event) => (
-                  <Pressable key={event.id} onPress={() => setSelectedEventId(event.id)}>
+                {group.items.map((event) => {
+                  const summary = eventSummaryById.get(event.id) || {
+                    peopleCount: event.peopleCount,
+                    dueToday: 0,
+                    overdue: 0,
+                    upcoming: 0,
+                    followUpsDue: 0,
+                  };
+
+                  return (
                     <Card
+                      key={event.id}
                       style={[
                         styles.eventCard,
                         selectedEvent?.id === event.id ? styles.eventCardSelected : null,
@@ -529,14 +578,38 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
                           {formatCategoryLabel(event.category as never)}
                         </Typography>
                         <Typography variant="caption">
-                          {event.eventDate ? `${formatEventDate(event.eventDate)} · ` : ""}{event.lastConnectedLabel}
+                          {event.eventDate ? formatEventDate(event.eventDate) : "No date set"}
                         </Typography>
                       </View>
                       <Typography variant="h2">{event.name}</Typography>
-                      <Typography variant="caption">{event.interactionCount} notes · {event.peopleCount} people</Typography>
+                      <Typography variant="caption">
+                        {summary.peopleCount} people · {event.interactionCount} notes
+                      </Typography>
+                      <Typography variant="caption">
+                        Due today {summary.dueToday} · Overdue {summary.overdue} · Upcoming {summary.upcoming}
+                      </Typography>
+                      <View style={styles.eventActions}>
+                        <Button label="View" onPress={() => setSelectedEventId(event.id)} variant="ghost" fullWidth={false} size="compact" />
+                        <Button label="Edit" onPress={() => openEditEvent(event)} variant="ghost" fullWidth={false} size="compact" />
+                        <Button
+                          label={isCurrentEvent(event) ? "End event" : "Set current"}
+                          onPress={() => handleCurrentEventToggle(event)}
+                          variant="ghost"
+                          fullWidth={false}
+                          size="compact"
+                        />
+                        <Button
+                          label={deleteArmedEventId === event.id ? "Delete now" : "Delete"}
+                          onPress={() => void handleDeleteEvent(event)}
+                          variant="ghost"
+                          fullWidth={false}
+                          size="compact"
+                          disabled={isDeletingEvent}
+                        />
+                      </View>
                     </Card>
-                  </Pressable>
-                ))}
+                  );
+                })}
               </View>
             ))}
             {!isLoading && groupedEvents.length === 0 ? (
@@ -556,64 +629,12 @@ export function EventScreen({ currentEvent }: EventScreenProps) {
               )
             ) : null}
           </View>
-
-
-          <View style={styles.sectionHeader}>
-            <Typography variant="caption">People linked to this event</Typography>
-            <Typography variant="body" style={styles.secondaryText}>
-              {selectedEvent
-                ? `These are the contacts most recently tied to ${selectedEvent.name}.`
-                : "Choose an event to see the people most recently tied to it."}
-            </Typography>
-          </View>
-
-          <View style={styles.peopleStack}>
-            {filteredPeople.map((person) => (
-              <Card key={person.id}>
-                <View style={styles.personTopRow}>
-                  <View style={styles.personCopy}>
-                    <Typography variant="h2">{person.name}</Typography>
-                    <Typography variant="caption">
-                      {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
-                    </Typography>
-                    {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
-                  </View>
-                  <Typography variant="caption">{person.bannerLabel}</Typography>
-                </View>
-                <Typography variant="body" style={styles.valueBlock} numberOfLines={2}>
-                  {person.nextStep || person.whatMatters}
-                </Typography>
-                {person.nextFollowUpAt ? <Typography variant="caption">Follow up: {person.nextFollowUpLabel}</Typography> : null}
-              </Card>
-            ))}
-            {!isLoading && filteredPeople.length === 0 ? (
-              <Typography variant="body">No people match this event filter yet.</Typography>
-            ) : null}
-          </View>
         </ScrollView>
 
-        <CaptureModal
-          visible={isCaptureOpen}
-          onClose={() => {
-            setCaptureOpen(false);
-            setCaptureInitialDraft(null);
-            setCaptureLockedEvent(null);
-          }}
-          onSave={handleSaveDraft}
-          isSaving={isSaving}
-          initialDraft={captureInitialDraft}
-          lockedEvent={captureLockedEvent}
-          title="Log Event Contact"
-          saveLabel="Save Event Contact"
-        />
-
         {isCompactLayout ? (
-          <FloatingActionBar
-            actions={[
-              { label: "Add event", onPress: openCreateEvent, variant: "ghost" },
-              { label: "Log contact", onPress: openGeneralCapture },
-            ]}
-          />
+          <View style={styles.mobileAddEventBar}>
+            <Button label="Add event" onPress={openCreateEvent} />
+          </View>
         ) : null}
 
         <Modal visible={isEventEditorOpen} animationType="slide" presentationStyle="pageSheet">
@@ -784,6 +805,9 @@ const styles = StyleSheet.create({
   featureCard: {
     gap: 10,
   },
+  currentEventCard: {
+    gap: 10,
+  },
   featureActions: {
     flexDirection: "row",
     gap: 8,
@@ -806,6 +830,12 @@ const styles = StyleSheet.create({
   eventCardSelected: {
     borderColor: colors.primaryAction,
   },
+  eventActions: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+    paddingTop: 4,
+  },
   eventHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -819,20 +849,22 @@ const styles = StyleSheet.create({
   peopleStack: {
     gap: 12,
   },
-  personTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  personCopy: {
-    flex: 1,
-    gap: 6,
-  },
-  valueBlock: {
-    marginTop: 12,
-    marginBottom: 10,
-    color: colors.textSecondary,
+  mobileAddEventBar: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    bottom: 18,
+    zIndex: 40,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 18,
+    backgroundColor: colors.surface,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
   },
   footerButtons: {
     gap: 10,

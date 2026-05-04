@@ -5,6 +5,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { Typography } from "./src/components/ui/Typography";
 import { CurrentEventSheet, CurrentEventValue } from "./src/components/CurrentEventSheet";
+import { EventWrapUpSheet } from "./src/components/EventWrapUpSheet";
+import { LiveEventBadge } from "./src/components/LiveEventBadge";
 import { formatCategoryLabel } from "./src/lib/crm";
 import { ensureProfileForUser, getCurrentUsername, signOutCurrentUser } from "./src/lib/auth";
 import { supabaseConfigMessage } from "./src/lib/supabase";
@@ -17,8 +19,10 @@ import { useAuth } from "./src/hooks/useAuth";
 import { colors } from "./src/theme/tokens";
 
 type ScreenKey = "home" | "event" | "person";
+type TutorialStep = "setEvent" | "capture";
 
 const CURRENT_EVENT_STORAGE_KEY = "blackbook.current_event";
+const TUTORIAL_STORAGE_KEY = "blackbook.tutorial.core_flow";
 
 function formatCurrentEventChipLabel(event: CurrentEventValue | null) {
   if (!event) {
@@ -32,6 +36,19 @@ function formatCurrentEventChipLabel(event: CurrentEventValue | null) {
   return event.eventDate?.trim()
     ? `Current: ${event.name} · ${typeLabel} · ${event.eventDate.trim()}`
     : `Current: ${event.name} · ${typeLabel}`;
+}
+
+function getWelcomeName(user: NonNullable<ReturnType<typeof useAuth>["user"]> | null, username: string | null) {
+  const metadata = user?.user_metadata || {};
+  const candidate =
+    metadata.name ||
+    metadata.full_name ||
+    metadata.preferred_username ||
+    metadata.user_name ||
+    username ||
+    (typeof user?.email === "string" ? user.email.split("@")[0] : null);
+
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : "there";
 }
 
 export default function App() {
@@ -50,7 +67,10 @@ export default function App() {
   const [personStatusMode, setPersonStatusMode] = useState<PersonStatusMode>("all");
   const [personStatusNonce, setPersonStatusNonce] = useState(0);
   const [isCurrentEventOpen, setCurrentEventOpen] = useState(false);
+  const [isEventWrapUpOpen, setEventWrapUpOpen] = useState(false);
   const [currentEvent, setCurrentEvent] = useState<CurrentEventValue | null>(null);
+  const [tutorialStep, setTutorialStep] = useState<TutorialStep | null>(null);
+  const welcomeName = getWelcomeName(activeUser, currentUsername);
 
   if (supabaseConfigMessage) {
     return (
@@ -147,6 +167,29 @@ useEffect(() => {
   void persistCurrentEvent();
 }, [currentEvent]);
 
+useEffect(() => {
+  let isMounted = true;
+
+  async function hydrateTutorial() {
+    if (!activeUser) {
+      return;
+    }
+
+    const seen = await AsyncStorage.getItem(TUTORIAL_STORAGE_KEY);
+    if (!isMounted || seen === "true") {
+      return;
+    }
+
+    setTutorialStep(currentEvent ? "capture" : "setEvent");
+  }
+
+  void hydrateTutorial();
+
+  return () => {
+    isMounted = false;
+  };
+}, [activeUser, currentEvent]);
+
   if (isLoading || isPreparingAccount) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -239,6 +282,33 @@ useEffect(() => {
     }
   }
 
+  function exitCurrentEventMode() {
+    setCurrentEvent(null);
+    setEventWrapUpOpen(false);
+  }
+
+  async function finishTutorial() {
+    setTutorialStep(null);
+    await AsyncStorage.setItem(TUTORIAL_STORAGE_KEY, "true");
+  }
+
+  function handleOpenTutorialEvent() {
+    setCurrentEventOpen(true);
+  }
+
+  function handleSaveCurrentEvent(value: CurrentEventValue) {
+    setCurrentEvent(value);
+    setCurrentEventOpen(false);
+    if (tutorialStep === "setEvent") {
+      setTutorialStep("capture");
+    }
+  }
+
+  function handleClearCurrentEvent() {
+    setCurrentEvent(null);
+    setCurrentEventOpen(false);
+  }
+
   function openAccountArea() {
     setNavMenuOpen(false);
     setAccountMenuOpen(true);
@@ -251,7 +321,7 @@ useEffect(() => {
         >
           <View style={styles.compactTopRow}>
             <View style={styles.compactBrandWrap}>
-              <Typography variant="caption">Blackbook</Typography>
+              <Typography variant="caption">Welcome, {welcomeName}</Typography>
               <Typography variant="h2">{screen === "home" ? "Home" : screen === "event" ? "Events" : "People"}</Typography>
             </View>
             <View style={styles.compactTopActions}>
@@ -261,7 +331,7 @@ useEffect(() => {
                 variant="ghost"
                 fullWidth={false}
                 size="compact"
-                style={styles.compactHeaderButton}
+                style={[styles.compactHeaderButton, tutorialStep === "setEvent" ? styles.tutorialTarget : null]}
               />
               <Button
                 label="Menu"
@@ -276,7 +346,8 @@ useEffect(() => {
         </View>
       ) : (
         <View style={styles.topBar}>
-          <View>
+          <View style={styles.brandCluster}>
+            <Typography variant="caption">Welcome, {welcomeName}</Typography>
             <Button
               label="Home"
               onPress={() => setScreen("home")}
@@ -301,7 +372,7 @@ useEffect(() => {
               variant="ghost"
               fullWidth={false}
               size="compact"
-              style={styles.currentEventButton}
+              style={[styles.currentEventButton, tutorialStep === "setEvent" ? styles.tutorialTarget : null]}
             />
             <Button
               label="Events"
@@ -333,6 +404,7 @@ useEffect(() => {
 
       {currentEvent ? (
         <View style={styles.currentEventBar}>
+          <LiveEventBadge eventDate={currentEvent.eventDate} />
           <Button
             label={formatCurrentEventChipLabel(currentEvent)}
             onPress={() => setCurrentEventOpen(true)}
@@ -341,8 +413,15 @@ useEffect(() => {
             size="compact"
           />
           <Button
-            label="Past Event Mode"
-            onPress={() => setCurrentEvent(null)}
+            label="Wrap up"
+            onPress={() => setEventWrapUpOpen(true)}
+            variant="primary"
+            fullWidth={false}
+            size="compact"
+          />
+          <Button
+            label="End event mode"
+            onPress={exitCurrentEventMode}
             variant="ghost"
             fullWidth={false}
             size="compact"
@@ -355,10 +434,17 @@ useEffect(() => {
           <HomeScreen
             currentEvent={currentEvent}
             onOpenPeopleFilter={handleOpenPeopleFilter}
-            onRequestOpenCurrentEvent={() => setCurrentEventOpen(true)}
+            showCaptureCoach={tutorialStep === "capture"}
+            onCaptureCoachDone={() => void finishTutorial()}
           />
         ) : null}
-        {screen === "event" ? <EventScreen currentEvent={currentEvent} /> : null}
+        {screen === "event" ? (
+          <EventScreen
+            currentEvent={currentEvent}
+            onSetCurrentEvent={setCurrentEvent}
+            onEndCurrentEvent={exitCurrentEventMode}
+          />
+        ) : null}
         {screen === "person" ? (
           <PersonProfileScreen
             currentEvent={currentEvent}
@@ -372,15 +458,33 @@ useEffect(() => {
         visible={isCurrentEventOpen}
         value={currentEvent}
         onClose={() => setCurrentEventOpen(false)}
-        onSave={(value) => {
-          setCurrentEvent(value);
-          setCurrentEventOpen(false);
-        }}
-        onClear={() => {
-          setCurrentEvent(null);
-          setCurrentEventOpen(false);
-        }}
+        onSave={handleSaveCurrentEvent}
+        onClear={handleClearCurrentEvent}
       />
+
+      <EventWrapUpSheet
+        visible={isEventWrapUpOpen}
+        event={currentEvent}
+        onClose={() => setEventWrapUpOpen(false)}
+        onExitEventMode={exitCurrentEventMode}
+      />
+
+      {tutorialStep === "setEvent" ? (
+        <View pointerEvents="box-none" style={styles.tutorialOverlay}>
+          <View pointerEvents="none" style={styles.tutorialDim} />
+          <View style={styles.tutorialCard}>
+            <Typography variant="caption">First move</Typography>
+            <Typography variant="h2">Set the event you are at.</Typography>
+            <Typography variant="body" style={styles.tutorialText}>
+              New people you capture will carry this context automatically.
+            </Typography>
+            <View style={styles.tutorialActions}>
+              <Button label="Set current event" onPress={handleOpenTutorialEvent} fullWidth={false} size="compact" />
+              <Button label="Skip" onPress={() => void finishTutorial()} variant="ghost" fullWidth={false} size="compact" />
+            </View>
+          </View>
+        </View>
+      ) : null}
 
       <Modal visible={isAuthModalOpen} animationType="slide" presentationStyle="pageSheet">
         <AuthScreen
@@ -484,6 +588,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
+  brandCluster: {
+    gap: 6,
+  },
   switcherCompact: {
     flexWrap: "wrap",
   },
@@ -521,6 +628,44 @@ const styles = StyleSheet.create({
   },
   currentEventButton: {
     maxWidth: 170,
+  },
+  tutorialOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 150,
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 86,
+  },
+  tutorialDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.24)",
+  },
+  tutorialCard: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 16,
+    gap: 10,
+  },
+  tutorialText: {
+    color: colors.textSecondary,
+  },
+  tutorialActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  tutorialTarget: {
+    borderColor: "#19A64A",
+    shadowColor: "#19A64A",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
   },
   currentEventBar: {
     paddingHorizontal: 16,

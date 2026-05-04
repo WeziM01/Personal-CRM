@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
+import { LiveEventBadge } from "../components/LiveEventBadge";
+import { PersonQuickActionsButton } from "../components/PersonQuickActionsButton";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -17,7 +18,6 @@ import {
   formatCategoryLabel,
   getOrCreateEvent,
   isContactStale,
-  listEventInsights,
   listPeopleInsights,
 } from "../lib/crm";
 import { colors, layout, radius } from "../theme/tokens";
@@ -26,24 +26,24 @@ import { PersonStatusMode } from "./PersonProfileScreen";
 type HomeScreenProps = {
   currentEvent: CurrentEventValue | null;
   onOpenPeopleFilter?: (status: PersonStatusMode) => void;
-  onRequestOpenCurrentEvent?: () => void;
+  showCaptureCoach?: boolean;
+  onCaptureCoachDone?: () => void;
 };
 
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
-const EVENT_ONBOARDING_KEY = "blackbook.onboarding.event";
-const CAPTURE_ONBOARDING_KEY = "blackbook.onboarding.capture";
-
-export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurrentEvent }: HomeScreenProps) {
+export function HomeScreen({
+  currentEvent,
+  onOpenPeopleFilter,
+  showCaptureCoach = false,
+  onCaptureCoachDone,
+}: HomeScreenProps) {
   const [isCaptureOpen, setCaptureOpen] = useState(false);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
-  const [events, setEvents] = useState<Awaited<ReturnType<typeof listEventInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
-  const [showEventOnboarding, setShowEventOnboarding] = useState(false);
-  const [showCaptureOnboarding, setShowCaptureOnboarding] = useState(false);
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const dueTodayPeople = useMemo(
@@ -67,29 +67,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
     () => people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority)).length,
     [people]
   );
-  const signalPeople = useMemo(() => {
-    if (activeSignal === "tracked") {
-      return people;
-    }
-
-    if (activeSignal === "contactedToday") {
-      return contactedTodayPeople;
-    }
-
-    if (activeSignal === "needNudge") {
-      return people.filter((person) => isContactStale(person.daysSinceLastContact, person.priority));
-    }
-
-    return recentPeople;
-  }, [activeSignal, contactedTodayPeople, people, recentPeople]);
-  const signalHeading =
-    activeSignal === "tracked"
-      ? "People tracked"
-      : activeSignal === "contactedToday"
-        ? "Reached out today"
-        : activeSignal === "needNudge"
-          ? "People who need a nudge"
-          : "Recently connected";
   const currentEventSummary = useMemo(() => {
     if (!currentEvent) {
       return null;
@@ -102,28 +79,13 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
     };
   }, [currentEvent, people]);
 
-  const eventPulse = useMemo(() => {
-    const counts = new Map<string, number>();
-    events.forEach((event) => {
-      counts.set(event.category, (counts.get(event.category) || 0) + 1);
-    });
-
-    return Array.from(counts.entries())
-      .map(([category, count]) => ({ category, count }))
-      .sort((left, right) => right.count - left.count)
-      .slice(0, 3);
-  }, [events]);
-
   async function loadData() {
     try {
       setLoading(true);
       setErrorMessage(null);
 
       const userId = await ensureSessionUserId();
-      const [peopleInsights, eventInsights] = await Promise.all([
-        listPeopleInsights(userId),
-        listEventInsights(userId),
-      ]);
+      const peopleInsights = await listPeopleInsights(userId);
 
       setPeople(
         peopleInsights.sort((left, right) => {
@@ -142,7 +104,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
           return right.lastInteractionAt.localeCompare(left.lastInteractionAt);
         })
       );
-      setEvents(eventInsights);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load data.";
       setErrorMessage(message);
@@ -154,57 +115,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
   useEffect(() => {
     loadData();
   }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function syncOnboarding() {
-      const [eventSeen, captureSeen] = await AsyncStorage.multiGet([EVENT_ONBOARDING_KEY, CAPTURE_ONBOARDING_KEY]);
-
-      if (!isMounted) {
-        return;
-      }
-
-      const hasCurrentEvent = Boolean(currentEvent?.name);
-      setShowEventOnboarding(!hasCurrentEvent && eventSeen?.[1] !== "true");
-      setShowCaptureOnboarding(hasCurrentEvent && people.length === 0 && captureSeen?.[1] !== "true");
-    }
-
-    void syncOnboarding();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [currentEvent?.name, people.length]);
-
-  useEffect(() => {
-    if (!currentEvent?.name) {
-      return;
-    }
-
-    void AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
-    setShowEventOnboarding(false);
-  }, [currentEvent?.name]);
-
-  async function dismissEventOnboarding() {
-    setShowEventOnboarding(false);
-    await AsyncStorage.setItem(EVENT_ONBOARDING_KEY, "true");
-  }
-
-  async function dismissCaptureOnboarding() {
-    setShowCaptureOnboarding(false);
-    await AsyncStorage.setItem(CAPTURE_ONBOARDING_KEY, "true");
-  }
-
-  async function handleOpenCurrentEventOnboarding() {
-    await dismissEventOnboarding();
-    onRequestOpenCurrentEvent?.();
-  }
-
-  async function handleOpenCaptureOnboarding() {
-    await dismissCaptureOnboarding();
-    openCapture();
-  }
 
   async function handleSaveDraft(draft: ParsedPersonDraft) {
     if (isSaving) {
@@ -254,6 +164,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
   }
 
   function openCapture() {
+    onCaptureCoachDone?.();
     setCaptureOpen(true);
   }
 
@@ -267,8 +178,11 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
               {[person.company, person.lastEventName || "No event logged"].filter(Boolean).join(" · ")}
             </Typography>
           </View>
-          <View style={styles.statusPill}>
-            <Typography variant="caption" style={styles.statusPillText}>{person.statusLabel}</Typography>
+          <View style={styles.cardActions}>
+            <View style={styles.statusPill}>
+              <Typography variant="caption" style={styles.statusPillText}>{person.statusLabel}</Typography>
+            </View>
+            <PersonQuickActionsButton person={person} onChanged={loadData} />
           </View>
         </View>
         <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
@@ -289,9 +203,9 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
           <View style={styles.headerRow}>
             <View style={styles.headerCopy}>
               <Typography variant="caption">Today</Typography>
-              <Typography variant="h1">Blackbook</Typography>
+              <Typography variant="h1">Morning queue</Typography>
               <Typography variant="body" style={styles.sectionMeta}>
-                Track warm contacts, spot follow-ups that are slipping, and keep event momentum alive.
+                Quick follow-ups before the day gets loud.
               </Typography>
             </View>
           </View>
@@ -301,9 +215,7 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
           {currentEvent ? (
             <Card style={styles.currentEventCard}>
               <View style={styles.currentEventTopRow}>
-                <View style={styles.liveBadge}>
-                  <Typography variant="caption" style={styles.liveBadgeText}>Live event</Typography>
-                </View>
+                <LiveEventBadge eventDate={currentEvent.eventDate} />
                 <Typography variant="caption">
                   {currentEvent.category === "other" && currentEvent.customCategoryLabel?.trim()
                     ? currentEvent.customCategoryLabel.trim()
@@ -320,34 +232,6 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
             </Card>
           ) : null}
 
-          {showEventOnboarding ? (
-            <Card style={styles.onboardingCard}>
-              <Typography variant="caption">Start here</Typography>
-              <Typography variant="h2">You are at an event right now.</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Set your current event first so every connection you capture carries the right context from the start.
-              </Typography>
-              <View style={styles.onboardingActions}>
-                <Button label="Set current event" onPress={() => void handleOpenCurrentEventOnboarding()} fullWidth={false} />
-                <Button label="Dismiss" onPress={() => void dismissEventOnboarding()} variant="ghost" fullWidth={false} />
-              </View>
-            </Card>
-          ) : null}
-
-          {showCaptureOnboarding ? (
-            <Card style={styles.onboardingCard}>
-              <Typography variant="caption">Next step</Typography>
-              <Typography variant="h2">Great. Who did you just meet?</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Capture your first connection from {currentEvent?.name || "this event"} and let the draft show the value instantly.
-              </Typography>
-              <View style={styles.onboardingActions}>
-                <Button label="Add connection" onPress={() => void handleOpenCaptureOnboarding()} fullWidth={false} />
-                <Button label="Dismiss" onPress={() => void dismissCaptureOnboarding()} variant="ghost" fullWidth={false} />
-              </View>
-            </Card>
-          ) : null}
-
           {errorMessage ? (
             <Card>
               <Typography variant="body">{errorMessage}</Typography>
@@ -355,11 +239,11 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
           ) : null}
 
           <Card style={styles.heroCard}>
-            <View style={styles.heroTopRow}>
-              <View style={styles.heroCopy}>
-                <Typography variant="caption" style={styles.heroCaption}>Pulse</Typography>
-                <Typography variant="h2" style={styles.heroHeading}>What needs your attention now</Typography>
-              </View>
+              <View style={styles.heroTopRow}>
+                <View style={styles.heroCopy}>
+                  <Typography variant="caption" style={styles.heroCaption}>Pulse</Typography>
+                  <Typography variant="h2" style={styles.heroHeading}>Who needs you now</Typography>
+                </View>
               {waitingOnYouCount ? (
                 <View style={styles.heroBadge}>
                   <Typography variant="caption" style={styles.heroBadgeText}>{waitingOnYouCount} waiting</Typography>
@@ -401,22 +285,10 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
             </View>
           </Card>
 
-          {waitingOnYouCount ? (
-            <Card style={styles.bannerCard}>
-              <Typography variant="h2">{waitingOnYouCount} people are waiting on you</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Due today and overdue follow-ups are surfaced first so you can move quickly.
-              </Typography>
-            </Card>
-          ) : null}
-
           {dueTodayPeople.length ? (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Typography variant="caption">Due today</Typography>
-                <Typography variant="body" style={styles.sectionMeta}>
-                  Follow-ups that should happen before the day gets away from you.
-                </Typography>
               </View>
               {dueTodayPeople.map((person) => renderPersonCard(person, "muted"))}
             </View>
@@ -426,42 +298,14 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Typography variant="caption">Overdue</Typography>
-                <Typography variant="body" style={styles.sectionMeta}>
-                  These follow-ups slipped past the original plan.
-                </Typography>
               </View>
               {overduePeople.map((person) => renderPersonCard(person, "muted"))}
-            </View>
-          ) : null}
-
-          {activeSignal !== "all" ? (
-            <View style={styles.sectionHeaderRow}>
-              <Typography variant="caption">{signalHeading}</Typography>
-              <Button
-                label="Clear"
-                onPress={() => setActiveSignal("all")}
-                variant="ghost"
-                fullWidth={false}
-                size="compact"
-              />
-            </View>
-          ) : null}
-
-          {activeSignal !== "all" ? (
-            <View style={styles.section}>
-              {signalPeople.map((person) => renderPersonCard(person))}
-              {!isLoading && signalPeople.length === 0 ? (
-                <Typography variant="body">No contacts in this segment yet.</Typography>
-              ) : null}
             </View>
           ) : null}
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Typography variant="caption">Recently connected</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Last touch, follow-up, and event memory in one glance.
-              </Typography>
             </View>
 
             {recentPeople.map((person) => renderPersonCard(person))}
@@ -473,40 +317,34 @@ export function HomeScreen({ currentEvent, onOpenPeopleFilter, onRequestOpenCurr
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Typography variant="caption">Needs follow-up</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Contacts drifting beyond two weeks.
-              </Typography>
             </View>
             {followUpPeople.map((person) => renderPersonCard(person, "muted"))}
             {!isLoading && followUpPeople.length === 0 ? (
               <Typography variant="body">Everyone is still warm.</Typography>
             ) : null}
           </View>
-
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Typography variant="caption">Event pulse</Typography>
-              <Typography variant="body" style={styles.sectionMeta}>
-                Dominant room types across your recent activity.
-              </Typography>
-            </View>
-            <View style={styles.pulseRow}>
-              {eventPulse.map((item) => (
-                <Card key={item.category} style={styles.pulseCard}>
-                  <Typography variant="h2">{item.count}</Typography>
-                  <Typography variant="caption">{formatCategoryLabel(item.category as never)}</Typography>
-                </Card>
-              ))}
-              {!isLoading && eventPulse.length === 0 ? (
-                <Card style={styles.pulseCard}>
-                  <Typography variant="body">No event categories yet.</Typography>
-                </Card>
-              ) : null}
-            </View>
-          </View>
         </ScrollView>
 
-        <FloatingFab label="+" onPress={openCapture} />
+        {showCaptureCoach ? (
+          <View pointerEvents="box-none" style={styles.captureCoachWrap}>
+            <View style={styles.captureCoachCard}>
+              <Typography variant="caption">Next</Typography>
+              <Typography variant="h2">Tap + when you meet someone.</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Capture the person now. Tidy the details later.
+              </Typography>
+              <View style={styles.onboardingActions}>
+                <Button label="Got it" onPress={onCaptureCoachDone || (() => undefined)} variant="ghost" fullWidth={false} size="compact" />
+              </View>
+            </View>
+          </View>
+        ) : null}
+
+        <FloatingFab
+          label="+"
+          onPress={openCapture}
+          style={showCaptureCoach ? styles.fabCoachTarget : null}
+        />
 
         <CaptureModal
           visible={isCaptureOpen}
@@ -560,10 +398,6 @@ const styles = StyleSheet.create({
   currentEventCard: {
     backgroundColor: colors.surface,
     gap: 10,
-  },
-  onboardingCard: {
-    gap: 12,
-    borderColor: colors.primaryAction,
   },
   onboardingActions: {
     flexDirection: "row",
@@ -682,8 +516,44 @@ const styles = StyleSheet.create({
   statusPillText: {
     color: colors.textSecondary,
   },
+  cardActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
+  },
   cardBody: {
     color: colors.textSecondary,
+  },
+  captureCoachWrap: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    bottom: 100,
+    zIndex: 90,
+    alignItems: "flex-end",
+  },
+  captureCoachCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 14,
+    gap: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  fabCoachTarget: {
+    borderColor: "#19A64A",
+    shadowColor: "#19A64A",
+    shadowOpacity: 0.45,
+    shadowRadius: 22,
+    elevation: 12,
   },
   pulseRow: {
     flexDirection: "row",

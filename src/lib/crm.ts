@@ -876,6 +876,8 @@ export function extractCompany(rawNote: string) {
 function stripInteractionMetadata(rawNote: string) {
   return rawNote
     .replace(/^Company:\s*.+$/gim, "")
+    .replace(/^Update\s*type:\s*.+$/gim, "")
+    .replace(/^Status:\s*.+$/gim, "")
     .replace(/^Next\s*step:\s*.+$/gim, "")
     .replace(/^Follow\s*up\s*date:\s*.+$/gim, "")
     .replace(/^Follow\s*up:\s*.+$/gim, "")
