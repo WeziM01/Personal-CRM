@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Animated, StyleSheet, View } from "react-native";
 
-import { colors, radius } from "../theme/tokens";
+import { radius, useTheme, useThemedStyles } from "../theme/tokens";
 import { Typography } from "./ui/Typography";
 
 type LiveEventBadgeProps = {
@@ -46,6 +46,8 @@ function getEventTiming(eventDate?: string | null): EventTiming {
 }
 
 export function LiveEventBadge({ label, eventDate }: LiveEventBadgeProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const pulse = useRef(new Animated.Value(0)).current;
   const timing = getEventTiming(eventDate);
   const isLive = timing === "live";
@@ -90,7 +92,7 @@ export function LiveEventBadge({ label, eventDate }: LiveEventBadgeProps) {
   });
 
   return (
-    <View style={[styles.badge, !isLive ? styles.badgeMuted : null]}>
+    <View style={[styles.badge, timing === "past" ? styles.badgePast : null, timing === "upcoming" ? styles.badgeUpcoming : null]}>
       {isLive ? (
         <Animated.View
           style={[
@@ -102,16 +104,16 @@ export function LiveEventBadge({ label, eventDate }: LiveEventBadgeProps) {
           ]}
         />
       ) : (
-        <View style={styles.dotMuted} />
+        <View style={[styles.dotMuted, timing === "upcoming" ? styles.dotUpcoming : null]} />
       )}
-      <Typography variant="caption" style={[styles.text, !isLive ? styles.textMuted : null]}>
+      <Typography variant="caption" style={[styles.text, timing === "past" ? styles.textPast : null, timing === "upcoming" ? styles.textUpcoming : null]}>
         {badgeLabel}
       </Typography>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useTheme>["colors"]) => StyleSheet.create({
   badge: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -124,8 +126,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  badgeMuted: {
+  badgePast: {
     backgroundColor: colors.surfaceMuted,
+  },
+  badgeUpcoming: {
+    backgroundColor: "#DBEAFE",
   },
   dot: {
     width: 9,
@@ -139,10 +144,16 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: colors.textTertiary,
   },
+  dotUpcoming: {
+    backgroundColor: "#2563EB",
+  },
   text: {
     color: "#17843A",
   },
-  textMuted: {
+  textPast: {
     color: colors.textSecondary,
+  },
+  textUpcoming: {
+    color: "#1D4ED8",
   },
 });

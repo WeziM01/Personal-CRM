@@ -9,25 +9,66 @@ export type Json =
 export type Database = {
 	public: {
 		Tables: {
-			profiles: {
-				Row: {
-					created_at: string;
-					user_id: string;
-					username: string;
-				};
-				Insert: {
-					created_at?: string;
-					user_id: string;
-					username: string;
-				};
-				Update: {
-					created_at?: string;
-					user_id?: string;
-					username?: string;
-				};
+				profiles: {
+					Row: {
+						access_role: string;
+						created_at: string;
+						email: string | null;
+						feature_flags: Json;
+						user_id: string;
+						username: string;
+					};
+					Insert: {
+						access_role?: string;
+						created_at?: string;
+						email?: string | null;
+						feature_flags?: Json;
+						user_id: string;
+						username: string;
+					};
+					Update: {
+						access_role?: string;
+						created_at?: string;
+						email?: string | null;
+						feature_flags?: Json;
+						user_id?: string;
+						username?: string;
+					};
 				Relationships: [
 					{
 						foreignKeyName: "profiles_user_id_fkey";
+						columns: ["user_id"];
+						isOneToOne: true;
+						referencedRelation: "users";
+						referencedColumns: ["id"];
+					},
+				];
+			};
+			reminder_preferences: {
+				Row: {
+					created_at: string;
+					email_digest_enabled: boolean;
+					last_digest_sent_on: string | null;
+					updated_at: string;
+					user_id: string;
+				};
+				Insert: {
+					created_at?: string;
+					email_digest_enabled?: boolean;
+					last_digest_sent_on?: string | null;
+					updated_at?: string;
+					user_id: string;
+				};
+				Update: {
+					created_at?: string;
+					email_digest_enabled?: boolean;
+					last_digest_sent_on?: string | null;
+					updated_at?: string;
+					user_id?: string;
+				};
+				Relationships: [
+					{
+						foreignKeyName: "reminder_preferences_user_id_fkey";
 						columns: ["user_id"];
 						isOneToOne: true;
 						referencedRelation: "users";

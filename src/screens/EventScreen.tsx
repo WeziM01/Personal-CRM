@@ -9,6 +9,8 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Clipboard from "expo-clipboard";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { LiveEventBadge } from "../components/LiveEventBadge";
@@ -28,7 +30,11 @@ import {
   parseDateOnlyString,
   updateEventDetails,
 } from "../lib/crm";
-import { colors, layout } from "../theme/tokens";
+import { buildCampaignUrl } from "../lib/campaign";
+import { buildPeopleCsv, exportCsvFile, getPeopleForEventExport } from "../lib/csvExport";
+import { exportSlackCanvas } from "../lib/slackExport";
+import { buildSlackCanvasSummary } from "../lib/slackCanvas";
+import { layout, useTheme, useThemedStyles } from "../theme/tokens";
 
 type SortMode = "recent" | "name" | "people" | "notes";
 
@@ -42,7 +48,19 @@ type EventScreenProps = {
   currentEvent: CurrentEventValue | null;
   onSetCurrentEvent?: (event: CurrentEventValue) => void;
   onEndCurrentEvent?: () => void;
+  canExportCsv?: boolean;
+  canManageCampaignLinks?: boolean;
+  canDirectSlackCanvas?: boolean;
 };
+
+type SavedEventEditorState = {
+  isOpen: boolean;
+  mode: "create" | "edit";
+  selectedEventId: string | null;
+  draft: EventEditorDraft;
+};
+
+const EVENT_EDITOR_STATE_STORAGE_KEY = "blackbook.event_editor_state";
 
 function toDateInputValue(date: Date) {
   const year = date.getFullYear();
@@ -58,15 +76,29 @@ function getRelativeDateInputValue(offsetDays: number) {
   return toDateInputValue(date);
 }
 
-export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent }: EventScreenProps) {
+export function EventScreen({
+  currentEvent,
+  onSetCurrentEvent,
+  onEndCurrentEvent,
+  canExportCsv = false,
+  canManageCampaignLinks = false,
+  canDirectSlackCanvas = false,
+}: EventScreenProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 720;
   const [isEventEditorOpen, setEventEditorOpen] = useState(false);
   const [isSavingEvent, setSavingEvent] = useState(false);
   const [isDeletingEvent, setDeletingEvent] = useState(false);
+  const [isExportingCsv, setExportingCsv] = useState(false);
+  const [isExportingSlackCanvas, setExportingSlackCanvas] = useState(false);
+  const [isCopyingCampaignLink, setCopyingCampaignLink] = useState(false);
+  const [isCopyingSlackCanvas, setCopyingSlackCanvas] = useState(false);
   const [deleteArmedEventId, setDeleteArmedEventId] = useState<string | null>(null);
   const [eventEditorMode, setEventEditorMode] = useState<"create" | "edit">("create");
   const [eventDraft, setEventDraft] = useState<EventEditorDraft>({ name: "", category: "", eventDate: getRelativeDateInputValue(0) });
+  const [hasHydratedEventEditorState, setHasHydratedEventEditorState] = useState(false);
   const quickDateChoices = useMemo(
     () => [
       { label: "Yesterday", value: getRelativeDateInputValue(-1) },
@@ -260,6 +292,64 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
     loadEventData();
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function hydrateEventEditorState() {
+      const rawState = await AsyncStorage.getItem(EVENT_EDITOR_STATE_STORAGE_KEY);
+      if (!rawState) {
+        if (isMounted) {
+          setHasHydratedEventEditorState(true);
+        }
+        return;
+      }
+
+      try {
+        const savedState = JSON.parse(rawState) as SavedEventEditorState;
+        if (isMounted && savedState.isOpen) {
+          setEventEditorMode(savedState.mode);
+          setSelectedEventId(savedState.selectedEventId);
+          setEventDraft(savedState.draft);
+          setEventEditorOpen(true);
+        }
+      } catch {
+        await AsyncStorage.removeItem(EVENT_EDITOR_STATE_STORAGE_KEY);
+      } finally {
+        if (isMounted) {
+          setHasHydratedEventEditorState(true);
+        }
+      }
+    }
+
+    void hydrateEventEditorState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasHydratedEventEditorState) {
+      return;
+    }
+
+    async function persistEventEditorState() {
+      const payload: SavedEventEditorState = {
+        isOpen: isEventEditorOpen,
+        mode: eventEditorMode,
+        selectedEventId,
+        draft: eventDraft,
+      };
+      await AsyncStorage.setItem(EVENT_EDITOR_STATE_STORAGE_KEY, JSON.stringify(payload));
+    }
+
+    void persistEventEditorState();
+  }, [eventDraft, eventEditorMode, hasHydratedEventEditorState, isEventEditorOpen, selectedEventId]);
+
+  async function clearEventEditorState() {
+    await AsyncStorage.removeItem(EVENT_EDITOR_STATE_STORAGE_KEY);
+  }
+
   function openCreateEvent() {
     setEventEditorMode("create");
     setEventDraft({
@@ -267,6 +357,19 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
       category: currentEvent?.category || "",
       eventDate: getRelativeDateInputValue(0),
     });
+    void AsyncStorage.setItem(
+      EVENT_EDITOR_STATE_STORAGE_KEY,
+      JSON.stringify({
+        isOpen: true,
+        mode: "create",
+        selectedEventId,
+        draft: {
+          name: currentEvent?.name || "",
+          category: currentEvent?.category || "",
+          eventDate: getRelativeDateInputValue(0),
+        },
+      } satisfies SavedEventEditorState)
+    );
     setEventEditorOpen(true);
   }
 
@@ -277,6 +380,15 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
       category: currentEvent?.category || "",
       eventDate: getRelativeDateInputValue(0),
     });
+    void AsyncStorage.setItem(
+      EVENT_EDITOR_STATE_STORAGE_KEY,
+      JSON.stringify({
+        isOpen: true,
+        mode: "create",
+        selectedEventId,
+        draft: { name, category: currentEvent?.category || "", eventDate: getRelativeDateInputValue(0) },
+      } satisfies SavedEventEditorState)
+    );
     setEventEditorOpen(true);
   }
 
@@ -292,6 +404,19 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
       category: targetEvent.category,
       eventDate: targetEvent.eventDate || "",
     });
+    void AsyncStorage.setItem(
+      EVENT_EDITOR_STATE_STORAGE_KEY,
+      JSON.stringify({
+        isOpen: true,
+        mode: "edit",
+        selectedEventId: targetEvent.id,
+        draft: {
+          name: targetEvent.name,
+          category: targetEvent.category,
+          eventDate: targetEvent.eventDate || "",
+        },
+      } satisfies SavedEventEditorState)
+    );
     setEventEditorOpen(true);
   }
 
@@ -326,14 +451,23 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
       }
 
       setEventEditorOpen(false);
+      await clearEventEditorState();
       await loadEventData();
-      Alert.alert("Saved", eventEditorMode === "edit" ? "Event updated." : "Event logged.");
+      Alert.alert(
+        eventEditorMode === "edit" ? "Event updated" : "Event added",
+        eventEditorMode === "edit" ? `${name} is up to date.` : `${name} is ready for capture.`
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save event.";
-      Alert.alert("Save failed", message);
+      Alert.alert("Could not save event", message);
     } finally {
       setSavingEvent(false);
     }
+  }
+
+  function closeEventEditor() {
+    void clearEventEditorState();
+    setEventEditorOpen(false);
   }
 
   function isCurrentEvent(event: (typeof events)[number]) {
@@ -375,10 +509,10 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
         onEndCurrentEvent?.();
       }
       await loadEventData();
-      Alert.alert("Deleted", `${targetEvent.name} removed. Existing interactions keep their notes.`);
+      Alert.alert("Event removed", `${targetEvent.name} is gone. Existing contact notes are still safe.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to delete event.";
-      Alert.alert("Delete failed", message);
+      Alert.alert("Could not delete event", message);
     } finally {
       setDeletingEvent(false);
       setDeleteArmedEventId(null);
@@ -398,12 +532,160 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
       setSelectedEventId(event.id);
       setSearchQuery("");
       await loadEventData();
-      Alert.alert("Event created", `${event.name} is now in your event list.`);
+      Alert.alert("Event added", `${event.name} is now in your event list.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create event.";
-      Alert.alert("Save failed", message);
+      Alert.alert("Could not add event", message);
     } finally {
       setSavingEvent(false);
+    }
+  }
+
+  async function handleExportCsv(targetEvent = selectedEvent) {
+    if (!targetEvent || isExportingCsv) {
+      return;
+    }
+
+    const exportPeople = getPeopleForEventExport({
+      people,
+      interactions,
+      eventId: targetEvent.id,
+      eventName: targetEvent.name,
+      eventCategory: targetEvent.category,
+      eventDate: targetEvent.eventDate,
+    });
+
+    if (!exportPeople.length) {
+      Alert.alert("Nothing to export yet", "Capture at least one person for this event first.");
+      return;
+    }
+
+    try {
+      setExportingCsv(true);
+      await exportCsvFile({
+        csv: buildPeopleCsv(exportPeople),
+        fileName: `${targetEvent.name} contacts`,
+      });
+    } catch (error) {
+      Alert.alert("CSV export failed", error instanceof Error ? error.message : "Could not export this event.");
+    } finally {
+      setExportingCsv(false);
+    }
+  }
+
+  async function handleCopyCampaignLink(targetEvent = selectedEvent) {
+    if (!targetEvent || isCopyingCampaignLink) {
+      return;
+    }
+
+    try {
+      setCopyingCampaignLink(true);
+      const url = buildCampaignUrl({
+        name: targetEvent.name,
+        category: targetEvent.category,
+        eventDate: targetEvent.eventDate,
+      });
+      await Clipboard.setStringAsync(url);
+      Alert.alert("Campaign link copied", "Send this link to testers so captures open inside this event.");
+    } catch {
+      Alert.alert("Could not copy campaign link", "Try again in a moment.");
+    } finally {
+      setCopyingCampaignLink(false);
+    }
+  }
+
+  async function handleCopySlackCanvas(targetEvent = selectedEvent) {
+    if (!targetEvent || isCopyingSlackCanvas) {
+      return;
+    }
+
+    const exportPeople = getPeopleForEventExport({
+      people,
+      interactions,
+      eventId: targetEvent.id,
+      eventName: targetEvent.name,
+      eventCategory: targetEvent.category,
+      eventDate: targetEvent.eventDate,
+    });
+
+    if (!exportPeople.length) {
+      Alert.alert("Nothing to summarise yet", "Capture at least one person for this event first.");
+      return;
+    }
+
+    try {
+      setCopyingSlackCanvas(true);
+      await Clipboard.setStringAsync(
+        buildSlackCanvasSummary({
+          eventName: targetEvent.name,
+          eventDate: targetEvent.eventDate,
+          campaignLink: buildCampaignUrl({
+            name: targetEvent.name,
+            category: targetEvent.category,
+            eventDate: targetEvent.eventDate,
+          }),
+          people: exportPeople,
+        })
+      );
+      Alert.alert("Slack Canvas summary copied", "Paste it into a Slack Canvas or channel when you are ready.");
+    } catch {
+      Alert.alert("Could not copy summary", "Try again in a moment.");
+    } finally {
+      setCopyingSlackCanvas(false);
+    }
+  }
+
+  function getSlackCanvasPayload(targetEvent: NonNullable<typeof selectedEvent>) {
+    const exportPeople = getPeopleForEventExport({
+      people,
+      interactions,
+      eventId: targetEvent.id,
+      eventName: targetEvent.name,
+      eventCategory: targetEvent.category,
+      eventDate: targetEvent.eventDate,
+    });
+
+    if (!exportPeople.length) {
+      return null;
+    }
+
+    return {
+      title: `${targetEvent.name} follow-up summary`,
+      markdown: buildSlackCanvasSummary({
+        eventName: targetEvent.name,
+        eventDate: targetEvent.eventDate,
+        campaignLink: buildCampaignUrl({
+          name: targetEvent.name,
+          category: targetEvent.category,
+          eventDate: targetEvent.eventDate,
+        }),
+        people: exportPeople,
+      }),
+    };
+  }
+
+  async function handleExportSlackCanvas(targetEvent = selectedEvent) {
+    if (!targetEvent || isExportingSlackCanvas) {
+      return;
+    }
+
+    const payload = getSlackCanvasPayload(targetEvent);
+    if (!payload) {
+      Alert.alert("Nothing to export yet", "Capture at least one person for this event first.");
+      return;
+    }
+
+    try {
+      setExportingSlackCanvas(true);
+      const result = await exportSlackCanvas(payload);
+      Alert.alert(
+        "Slack Canvas created",
+        result.canvasId ? `Canvas ID: ${result.canvasId}` : "Your event summary was sent to Slack."
+      );
+    } catch (error) {
+      Alert.alert("Slack export failed", error instanceof Error ? error.message : "Could not create the Slack Canvas.");
+    } finally {
+      setExportingSlackCanvas(false);
     }
   }
 
@@ -436,6 +718,11 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
               <Typography variant="body" style={styles.secondaryText}>
                 {currentEventSummary.peopleCount} people added · {currentEventSummary.followUpsDue} follow-ups due
               </Typography>
+              {canManageCampaignLinks && currentEvent.isCampaignMode && currentEvent.campaignSlug ? (
+                <Typography variant="caption" style={styles.secondaryText}>
+                  Campaign mode · /e/{currentEvent.campaignSlug}
+                </Typography>
+              ) : null}
               <View style={styles.featureActions}>
                 <Button
                   label="View event"
@@ -537,6 +824,44 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
                   size="compact"
                 />
                 <Button label="Edit" onPress={() => openEditEvent()} variant="ghost" fullWidth={false} size="compact" />
+                {canManageCampaignLinks ? (
+                  <Button
+                    label="Copy campaign link"
+                    onPress={() => void handleCopyCampaignLink(selectedEvent)}
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    loading={isCopyingCampaignLink}
+                  />
+                ) : null}
+                <Button
+                  label="Copy Slack Canvas"
+                  onPress={() => void handleCopySlackCanvas(selectedEvent)}
+                  variant="ghost"
+                  fullWidth={false}
+                  size="compact"
+                  loading={isCopyingSlackCanvas}
+                />
+                {canDirectSlackCanvas ? (
+                  <Button
+                    label="Create Slack Canvas"
+                    onPress={() => void handleExportSlackCanvas(selectedEvent)}
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    loading={isExportingSlackCanvas}
+                  />
+                ) : null}
+                {canExportCsv ? (
+                  <Button
+                    label="Export CSV"
+                    onPress={() => void handleExportCsv(selectedEvent)}
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    loading={isExportingCsv}
+                  />
+                ) : null}
                 <Button
                   label={deleteArmedEventId === selectedEvent.id ? "Delete now" : "Delete"}
                   onPress={() => void handleDeleteEvent(selectedEvent)}
@@ -591,6 +916,44 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
                       <View style={styles.eventActions}>
                         <Button label="View" onPress={() => setSelectedEventId(event.id)} variant="ghost" fullWidth={false} size="compact" />
                         <Button label="Edit" onPress={() => openEditEvent(event)} variant="ghost" fullWidth={false} size="compact" />
+                        {canManageCampaignLinks ? (
+                          <Button
+                            label="Copy campaign link"
+                            onPress={() => void handleCopyCampaignLink(event)}
+                            variant="ghost"
+                            fullWidth={false}
+                            size="compact"
+                            loading={isCopyingCampaignLink}
+                          />
+                        ) : null}
+                        <Button
+                          label="Copy Slack Canvas"
+                          onPress={() => void handleCopySlackCanvas(event)}
+                          variant="ghost"
+                          fullWidth={false}
+                          size="compact"
+                          loading={isCopyingSlackCanvas}
+                        />
+                        {canDirectSlackCanvas ? (
+                          <Button
+                            label="Create Slack Canvas"
+                            onPress={() => void handleExportSlackCanvas(event)}
+                            variant="ghost"
+                            fullWidth={false}
+                            size="compact"
+                            loading={isExportingSlackCanvas}
+                          />
+                        ) : null}
+                        {canExportCsv ? (
+                          <Button
+                            label="Export CSV"
+                            onPress={() => void handleExportCsv(event)}
+                            variant="ghost"
+                            fullWidth={false}
+                            size="compact"
+                            loading={isExportingCsv}
+                          />
+                        ) : null}
                         <Button
                           label={isCurrentEvent(event) ? "End event" : "Set current"}
                           onPress={() => handleCurrentEventToggle(event)}
@@ -647,7 +1010,7 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
                 </View>
                 <Button
                   label="Close"
-                  onPress={() => setEventEditorOpen(false)}
+                  onPress={closeEventEditor}
                   variant="ghost"
                   fullWidth={false}
                   size="compact"
@@ -716,7 +1079,7 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
                   loading={isSavingEvent}
                   disabled={!eventDraft.name.trim()}
                 />
-                <Button label="Cancel" onPress={() => setEventEditorOpen(false)} variant="ghost" />
+                <Button label="Cancel" onPress={closeEventEditor} variant="ghost" />
               </View>
             </View>
           </SafeAreaView>
@@ -726,7 +1089,7 @@ export function EventScreen({ currentEvent, onSetCurrentEvent, onEndCurrentEvent
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useTheme>["colors"]) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,

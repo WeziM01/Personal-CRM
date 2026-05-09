@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import {
   requestRecordingPermissionsAsync,
@@ -35,13 +36,12 @@ import {
   FollowUpPreset,
   formatCategoryLabel,
   formatFollowUpDate,
-  getPresetDate,
   getSuggestedFollowUpPreset,
-  PERSON_TAG_SUGGESTIONS,
   PersonPriority,
   PreferredChannel,
+  toDateOnlyString,
 } from "../lib/crm";
-import { colors, layout, radius } from "../theme/tokens";
+import { layout, radius, useTheme, useThemedStyles } from "../theme/tokens";
 
 export type QuickCaptureMethod = "manual" | "paste" | "voice" | "scan";
 
@@ -91,6 +91,16 @@ const preferredChannelOptions: Array<{ label: string; value: PreferredChannel }>
   { label: "Other", value: "other" },
 ];
 
+const goalTagOptions = [
+  "Business Opportunity",
+  "Potential Client",
+  "New Hire",
+  "Partner",
+  "Interesting",
+  "Other",
+] as const;
+const goalTagSet = new Set<string>(goalTagOptions);
+
 export type LockedEventDraft = {
   name: string;
   category: EventCategory;
@@ -99,7 +109,7 @@ export type LockedEventDraft = {
 type CaptureModalProps = {
   visible: boolean;
   onClose: () => void;
-  onSave: (draft: ParsedPersonDraft) => void;
+  onSave: (draft: ParsedPersonDraft, options?: { addAnother?: boolean }) => void | Promise<void>;
   title?: string;
   saveLabel?: string;
   isSaving?: boolean;
@@ -107,6 +117,16 @@ type CaptureModalProps = {
   lockedEvent?: LockedEventDraft | null;
   initialMethod?: QuickCaptureMethod;
   showQuickCapture?: boolean;
+  showSaveAndAddAnother?: boolean;
+  draftStorageKey?: string;
+  autosaveWithInitialDraft?: boolean;
+};
+
+type SavedCaptureDraft = {
+  draft: ParsedPersonDraft;
+  activeMethod: QuickCaptureMethod;
+  pasteInput: string;
+  isFollowUpManuallySet: boolean;
 };
 
 function cleanValue(value: string) {
@@ -134,16 +154,48 @@ function buildDraftSentence(draft: ParsedPersonDraft) {
 
 function getSuggestedPresetLabel(category: EventCategory | "" | null | undefined) {
   const preset = getSuggestedFollowUpPreset(category || null);
+  return getPresetLabel(preset);
+}
+
+function getPresetDateTime(preset: FollowUpPreset, baseDate = new Date()) {
+  const date = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 10, 0, 0, 0);
+
+  if (preset === "tomorrow") {
+    date.setDate(date.getDate() + 1);
+  } else if (preset === "in3days") {
+    date.setDate(date.getDate() + 3);
+  } else if (preset === "nextWeek") {
+    date.setDate(date.getDate() + 7);
+  }
+
+  return toDateOnlyString(date);
+}
+
+function getPresetLabel(preset: FollowUpPreset) {
   if (preset === "tomorrow") {
     return "Tomorrow";
   }
+
   if (preset === "in3days") {
     return "In 3 days";
   }
-  if (preset === "nextWeek") {
-    return "Next week";
+
+  return "Next week";
+}
+
+function getCustomDateTimeParts(value?: string | null) {
+  return {
+    date: value?.trim() || getPresetDateTime("nextWeek"),
+  };
+}
+
+function combineCustomDateTime(dateValue: string) {
+  const dateMatch = dateValue.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dateMatch) {
+    return null;
   }
-  return "Custom";
+
+  return dateValue.trim();
 }
 
 function parsePastedInput(rawValue: string, lockedEvent?: LockedEventDraft | null) {
@@ -256,11 +308,18 @@ export function CaptureModal({
   lockedEvent,
   initialMethod = "manual",
   showQuickCapture = true,
+  showSaveAndAddAnother = true,
+  draftStorageKey,
+  autosaveWithInitialDraft = false,
 }: CaptureModalProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [draft, setDraft] = useState<ParsedPersonDraft>(emptyDraft);
   const [isFollowUpManuallySet, setFollowUpManuallySet] = useState(false);
   const [activeMethod, setActiveMethod] = useState<QuickCaptureMethod>(initialMethod);
   const [pasteInput, setPasteInput] = useState("");
+  const [customFollowUpDate, setCustomFollowUpDate] = useState("");
+  const [hasHydratedSavedDraft, setHasHydratedSavedDraft] = useState(false);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
@@ -277,29 +336,91 @@ export function CaptureModal({
       return;
     }
 
-    const eventCategory = lockedEvent?.category || initialDraft?.eventCategory || "";
-    const followUpPreset = initialDraft?.followUpPreset || getSuggestedFollowUpPreset(eventCategory || null);
-    const nextFollowUpAt = initialDraft?.nextFollowUpAt || getPresetDate(followUpPreset);
+    let isMounted = true;
 
-    setDraft({
-      ...emptyDraft,
-      ...initialDraft,
-      event: lockedEvent?.name || initialDraft?.event || "",
-      eventCategory,
-      whatMatters: initialDraft?.whatMatters || "",
-      nextStep: initialDraft?.nextStep || "",
-      followUpPreset,
-      nextFollowUpAt,
-      rawInput: initialDraft?.rawInput || "",
-    });
-    setFollowUpManuallySet(Boolean(initialDraft?.nextFollowUpAt || initialDraft?.followUpPreset));
-    setActiveMethod(initialMethod);
-    setPasteInput(initialDraft?.rawInput || "");
-    setScanError(null);
-    setIsCardScanProcessing(false);
-    setIsScanChoiceVisible(false);
-    setIsQrScannerVisible(false);
+    async function hydrateDraft() {
+      setHasHydratedSavedDraft(false);
+
+      const eventCategory: EventCategory | "" = lockedEvent?.category || initialDraft?.eventCategory || "";
+      const followUpPreset = initialDraft?.followUpPreset || getSuggestedFollowUpPreset(eventCategory || null);
+      const nextFollowUpAt = initialDraft?.nextFollowUpAt || getPresetDateTime(followUpPreset);
+      const baseDraft: ParsedPersonDraft = {
+        ...emptyDraft,
+        ...initialDraft,
+        event: lockedEvent?.name || initialDraft?.event || "",
+        eventCategory,
+        whatMatters: initialDraft?.whatMatters || "",
+        nextStep: initialDraft?.nextStep || "",
+        followUpPreset,
+        nextFollowUpAt,
+        rawInput: initialDraft?.rawInput || "",
+      };
+
+      let savedDraft: SavedCaptureDraft | null = null;
+      if (draftStorageKey && (!initialDraft || autosaveWithInitialDraft)) {
+        const rawSavedDraft = await AsyncStorage.getItem(draftStorageKey);
+        if (rawSavedDraft) {
+          try {
+            savedDraft = JSON.parse(rawSavedDraft) as SavedCaptureDraft;
+          } catch {
+            await AsyncStorage.removeItem(draftStorageKey);
+          }
+        }
+      }
+
+      if (!isMounted) {
+        return;
+      }
+
+      const nextDraft: ParsedPersonDraft = savedDraft?.draft
+        ? {
+            ...baseDraft,
+            ...savedDraft.draft,
+            event: lockedEvent?.name || savedDraft.draft.event || baseDraft.event,
+            eventCategory: lockedEvent?.category || savedDraft.draft.eventCategory || baseDraft.eventCategory,
+          }
+        : baseDraft;
+
+      setDraft(nextDraft);
+      setFollowUpManuallySet(
+        savedDraft?.isFollowUpManuallySet ?? Boolean(initialDraft?.nextFollowUpAt || initialDraft?.followUpPreset)
+      );
+      setActiveMethod(savedDraft?.activeMethod || initialMethod);
+      setPasteInput(savedDraft?.pasteInput || initialDraft?.rawInput || "");
+      const customParts = getCustomDateTimeParts(nextDraft.nextFollowUpAt);
+      setCustomFollowUpDate(customParts.date);
+      setScanError(null);
+      setIsCardScanProcessing(false);
+      setIsScanChoiceVisible(false);
+      setIsQrScannerVisible(false);
+      setHasHydratedSavedDraft(true);
+    }
+
+    void hydrateDraft();
+
+    return () => {
+      isMounted = false;
+    };
   }, [initialDraft, initialMethod, lockedEvent, visible]);
+
+  useEffect(() => {
+    if (!visible || !draftStorageKey || !hasHydratedSavedDraft || (initialDraft && !autosaveWithInitialDraft)) {
+      return;
+    }
+
+    async function persistDraft() {
+      const payload: SavedCaptureDraft = {
+        draft,
+        activeMethod,
+        pasteInput,
+        isFollowUpManuallySet,
+      };
+
+      await AsyncStorage.setItem(draftStorageKey as string, JSON.stringify(payload));
+    }
+
+    void persistDraft();
+  }, [activeMethod, autosaveWithInitialDraft, draft, draftStorageKey, hasHydratedSavedDraft, initialDraft, isFollowUpManuallySet, pasteInput, visible]);
 
   useEffect(() => {
     if (!visible || isFollowUpManuallySet) {
@@ -307,16 +428,26 @@ export function CaptureModal({
     }
 
     const preset = getSuggestedFollowUpPreset(draft.eventCategory || null);
+    const nextFollowUpAt = getPresetDateTime(preset);
+    const customParts = getCustomDateTimeParts(nextFollowUpAt);
+    setCustomFollowUpDate(customParts.date);
     setDraft((current) => ({
       ...current,
       followUpPreset: preset,
-      nextFollowUpAt: getPresetDate(preset),
+      nextFollowUpAt,
     }));
   }, [draft.eventCategory, isFollowUpManuallySet, visible]);
 
   const sentencePreview = useMemo(() => buildDraftSentence(draft), [draft]);
   const canSave = cleanValue(draft.name).length > 0;
   const suggestedPresetLabel = getSuggestedPresetLabel(draft.eventCategory || lockedEvent?.category || null);
+  const followUpPresetOptions = useMemo(
+    () => (["tomorrow", "in3days", "nextWeek"] as const).map((preset) => ({
+      preset,
+      label: getPresetLabel(preset),
+    })),
+    []
+  );
 
   function updateField(field: keyof ParsedPersonDraft, value: string) {
     setDraft((current) => ({
@@ -544,29 +675,49 @@ export function CaptureModal({
   }
 
   function handleFollowUpPresetSelect(preset: FollowUpPreset) {
+    const nextFollowUpAt = getPresetDateTime(preset);
+    const customParts = getCustomDateTimeParts(nextFollowUpAt);
     setFollowUpManuallySet(true);
+    setCustomFollowUpDate(customParts.date);
     setDraft((current) => ({
       ...current,
       followUpPreset: preset,
-      nextFollowUpAt: getPresetDate(preset),
+      nextFollowUpAt,
     }));
   }
 
   function handleCustomFollowUp() {
     setFollowUpManuallySet(true);
+    const fallback = getPresetDateTime("nextWeek");
     setDraft((current) => ({
       ...current,
       followUpPreset: "custom",
-      nextFollowUpAt: current.nextFollowUpAt || getPresetDate("nextWeek"),
+      nextFollowUpAt: current.nextFollowUpAt || fallback,
+    }));
+
+    const customParts = getCustomDateTimeParts(draft.nextFollowUpAt || fallback);
+    setCustomFollowUpDate(customParts.date);
+  }
+
+  function updateCustomFollowUpDate(value: string) {
+    setCustomFollowUpDate(value);
+    const combinedValue = combineCustomDateTime(value);
+    setDraft((current) => ({
+      ...current,
+      followUpPreset: "custom",
+      nextFollowUpAt: combinedValue || current.nextFollowUpAt,
     }));
   }
 
   function toggleTag(tag: string) {
     setDraft((current) => {
       const hasTag = current.tags.includes(tag);
+      const isGoalTag = goalTagSet.has(tag);
+      const baseTags = isGoalTag ? current.tags.filter((item) => !goalTagSet.has(item)) : current.tags;
+
       return {
         ...current,
-        tags: hasTag ? current.tags.filter((item) => item !== tag) : [...current.tags, tag],
+        tags: hasTag ? current.tags.filter((item) => item !== tag) : [...baseTags, tag],
       };
     });
   }
@@ -579,12 +730,8 @@ export function CaptureModal({
     }));
   }
 
-  function handleSave() {
-    if (isSaving || !canSave) {
-      return;
-    }
-
-    onSave({
+  function buildCleanDraft() {
+    return {
       ...draft,
       name: cleanValue(draft.name),
       priority: draft.priority,
@@ -602,7 +749,48 @@ export function CaptureModal({
       nextFollowUpAt: cleanValue(draft.nextFollowUpAt),
       followUpPreset: draft.followUpPreset,
       rawInput: cleanValue(draft.rawInput) || sentencePreview,
+    };
+  }
+
+  function resetForAnotherCapture() {
+    const eventCategory: EventCategory | "" = lockedEvent?.category || "";
+    const followUpPreset = getSuggestedFollowUpPreset(eventCategory || null);
+    const nextFollowUpAt = getPresetDateTime(followUpPreset);
+    const customParts = getCustomDateTimeParts(nextFollowUpAt);
+    setDraft({
+      ...emptyDraft,
+      event: lockedEvent?.name || "",
+      eventCategory,
+      followUpPreset,
+      nextFollowUpAt,
     });
+    setCustomFollowUpDate(customParts.date);
+    setPasteInput("");
+    setActiveMethod(initialMethod);
+    setFollowUpManuallySet(false);
+  }
+
+  async function handleSave(addAnother = false) {
+    if (isSaving || !canSave) {
+      return;
+    }
+
+    if (draftStorageKey) {
+      void AsyncStorage.removeItem(draftStorageKey);
+    }
+
+    await onSave(buildCleanDraft(), { addAnother });
+    if (addAnother) {
+      resetForAnotherCapture();
+    }
+  }
+
+  function handleClose() {
+    if (draftStorageKey) {
+      void AsyncStorage.removeItem(draftStorageKey);
+    }
+
+    onClose();
   }
 
   return (
@@ -623,7 +811,7 @@ export function CaptureModal({
                   Capture quickly now, tidy the details second.
                 </Typography>
               </View>
-              <Pressable onPress={onClose} hitSlop={12} style={styles.closePill}>
+              <Pressable onPress={handleClose} hitSlop={12} style={styles.closePill}>
                 <Typography variant="caption" style={styles.closeText}>
                   Close
                 </Typography>
@@ -744,9 +932,9 @@ export function CaptureModal({
 
             <Card style={styles.sectionCard}>
               <View style={styles.sectionIntro}>
-                <Typography variant="caption">Basics</Typography>
+                <Typography variant="caption">Who + why</Typography>
                 <Typography variant="body" style={styles.helperText}>
-                  Save the minimum context you need to recognize them later.
+                  Just enough context to remember why this person matters.
                 </Typography>
               </View>
 
@@ -762,34 +950,33 @@ export function CaptureModal({
                 />
               </View>
 
-              <View style={styles.twoColumnRow}>
-                <View style={styles.metaInputBlock}>
-                  <Typography variant="caption">Company</Typography>
-                  <TextInput
-                    placeholder="Stripe"
-                    placeholderTextColor={colors.textTertiary}
-                    style={styles.fieldInput}
-                    value={draft.company}
-                    onChangeText={(value) => updateField("company", value)}
-                  />
-                </View>
-                <View style={styles.metaInputBlock}>
-                  <Typography variant="caption">Event</Typography>
-                  <TextInput
-                    placeholder="React Native EU"
-                    placeholderTextColor={colors.textTertiary}
-                    style={styles.fieldInput}
-                    value={draft.event}
-                    onChangeText={(value) => updateField("event", value)}
-                    editable={!lockedEvent}
-                  />
-                </View>
+              <View style={styles.fieldBlock}>
+                <Typography variant="caption">Company</Typography>
+                <TextInput
+                  placeholder="Stripe"
+                  placeholderTextColor={colors.textTertiary}
+                  style={styles.fieldInput}
+                  value={draft.company}
+                  onChangeText={(value) => updateField("company", value)}
+                />
+              </View>
+
+              <View style={styles.fieldBlock}>
+                <Typography variant="caption">Why they matter</Typography>
+                <TextInput
+                  placeholder="Investor in climate, hiring designers, runs the community..."
+                  placeholderTextColor={colors.textTertiary}
+                  style={[styles.fieldInput, styles.fastTextAreaInput]}
+                  value={draft.whatMatters}
+                  onChangeText={(value) => updateField("whatMatters", value)}
+                  multiline
+                />
               </View>
 
               <View style={styles.chipSection}>
-                <Typography variant="caption">Quick tags</Typography>
+                <Typography variant="caption">Goal</Typography>
                 <View style={styles.chipRow}>
-                  {PERSON_TAG_SUGGESTIONS.map((tag) => (
+                  {goalTagOptions.map((tag) => (
                     <Button
                       key={tag}
                       label={tag}
@@ -809,9 +996,6 @@ export function CaptureModal({
 
               <View style={styles.chipSection}>
                 <Typography variant="caption">Preferred contact method</Typography>
-                <Typography variant="body" style={styles.helperText}>
-                  Save the channel they actually want you to use later.
-                </Typography>
                 <View style={styles.chipRow}>
                   {preferredChannelOptions.map((option) => (
                     <Button
@@ -840,30 +1024,18 @@ export function CaptureModal({
 
             <Card style={styles.sectionCard}>
               <View style={styles.sectionIntro}>
-                <Typography variant="caption">Context</Typography>
+                <Typography variant="caption">Next step</Typography>
                 <Typography variant="body" style={styles.helperText}>
-                  This is the memory layer that makes the contact useful later.
+                  The small action or messy thought you do not want to lose.
                 </Typography>
               </View>
 
               <View style={styles.fieldBlock}>
-                <Typography variant="caption">What matters / Context</Typography>
+                <Typography variant="caption">Next step / brain dump</Typography>
                 <TextInput
-                  placeholder="What clicked here?"
+                  placeholder="Send deck, make intro, ask about the role..."
                   placeholderTextColor={colors.textTertiary}
-                  style={[styles.fieldInput, styles.textAreaInput]}
-                  value={draft.whatMatters}
-                  onChangeText={(value) => updateField("whatMatters", value)}
-                  multiline
-                />
-              </View>
-
-              <View style={styles.fieldBlock}>
-                <Typography variant="caption">What should happen next</Typography>
-                <TextInput
-                  placeholder="Send deck, make intro, check in next week..."
-                  placeholderTextColor={colors.textTertiary}
-                  style={[styles.fieldInput, styles.textAreaInput]}
+                  style={[styles.fieldInput, styles.fastTextAreaInput]}
                   value={draft.nextStep}
                   onChangeText={(value) => updateField("nextStep", value)}
                   multiline
@@ -914,8 +1086,22 @@ export function CaptureModal({
               <View style={styles.sectionIntro}>
                 <Typography variant="caption">Follow-up</Typography>
                 <Typography variant="body" style={styles.helperText}>
-                  Suggested from the event type, but easy to override.
+                  Pick a sensible reminder. Add it to calendar from the person card after saving.
                 </Typography>
+              </View>
+
+              <View style={styles.twoColumnRow}>
+                <View style={styles.metaInputBlock}>
+                  <Typography variant="caption">Event</Typography>
+                  <TextInput
+                    placeholder="React Native EU"
+                    placeholderTextColor={colors.textTertiary}
+                    style={styles.fieldInput}
+                    value={draft.event}
+                    onChangeText={(value) => updateField("event", value)}
+                    editable={!lockedEvent}
+                  />
+                </View>
               </View>
 
               <View style={styles.chipSection}>
@@ -938,32 +1124,21 @@ export function CaptureModal({
               </View>
 
               <View style={styles.chipSection}>
-                <Typography variant="caption">Follow up when?</Typography>
+                <Typography variant="caption">Suggested follow-up</Typography>
                 <Typography variant="body" style={styles.helperText}>
-                  Suggested based on event type: {suggestedPresetLabel}
+                  Suggested from event type: {suggestedPresetLabel}
                 </Typography>
                 <View style={styles.chipRow}>
-                  <Button
-                    label="Tomorrow"
-                    onPress={() => handleFollowUpPresetSelect("tomorrow")}
-                    variant={draft.followUpPreset === "tomorrow" ? "primary" : "ghost"}
-                    fullWidth={false}
-                    size="compact"
-                  />
-                  <Button
-                    label="In 3 days"
-                    onPress={() => handleFollowUpPresetSelect("in3days")}
-                    variant={draft.followUpPreset === "in3days" ? "primary" : "ghost"}
-                    fullWidth={false}
-                    size="compact"
-                  />
-                  <Button
-                    label="Next week"
-                    onPress={() => handleFollowUpPresetSelect("nextWeek")}
-                    variant={draft.followUpPreset === "nextWeek" ? "primary" : "ghost"}
-                    fullWidth={false}
-                    size="compact"
-                  />
+                  {followUpPresetOptions.map((option) => (
+                    <Button
+                      key={option.preset}
+                      label={option.label}
+                      onPress={() => handleFollowUpPresetSelect(option.preset)}
+                      variant={draft.followUpPreset === option.preset ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                    />
+                  ))}
                   <Button
                     label="Custom"
                     onPress={handleCustomFollowUp}
@@ -978,21 +1153,24 @@ export function CaptureModal({
                   </Typography>
                 ) : null}
                 {draft.followUpPreset === "custom" ? (
-                  <TextInput
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor={colors.textTertiary}
-                    style={styles.fieldInput}
-                    value={draft.nextFollowUpAt}
-                    onChangeText={(value) => updateField("nextFollowUpAt", value)}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
+                  <View style={styles.metaInputBlock}>
+                    <Typography variant="caption">Custom date</Typography>
+                    <TextInput
+                      placeholder="YYYY-MM-DD"
+                      placeholderTextColor={colors.textTertiary}
+                      style={styles.fieldInput}
+                      value={customFollowUpDate}
+                      onChangeText={updateCustomFollowUpDate}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                  </View>
                 ) : null}
               </View>
             </Card>
 
-            <Card style={styles.sectionCard}>
-              <Typography variant="caption">Preview</Typography>
+            <Card style={[styles.sectionCard, styles.previewCard]}>
+              <Typography variant="caption">Draft preview</Typography>
               <Typography variant="body" style={styles.previewText}>
                 {sentencePreview}
               </Typography>
@@ -1001,8 +1179,11 @@ export function CaptureModal({
 
           <View style={styles.footerWrap}>
             <View style={styles.footerButtons}>
-              <Button label={saveLabel} onPress={handleSave} loading={isSaving} disabled={!canSave} />
-              <Button label="Cancel" onPress={onClose} variant="ghost" />
+              <Button label={saveLabel} onPress={() => void handleSave(false)} loading={isSaving} disabled={!canSave} />
+              {showSaveAndAddAnother ? (
+                <Button label="Save & Add Another" onPress={() => void handleSave(true)} loading={isSaving} disabled={!canSave} variant="ghost" />
+              ) : null}
+              <Button label="Cancel" onPress={handleClose} variant="ghost" />
             </View>
           </View>
         </View>
@@ -1044,7 +1225,7 @@ export function CaptureModal({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useTheme>["colors"]) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
@@ -1144,8 +1325,15 @@ const styles = StyleSheet.create({
     minHeight: 96,
     textAlignVertical: "top",
   },
+  fastTextAreaInput: {
+    minHeight: 72,
+    textAlignVertical: "top",
+  },
   chipSection: {
     gap: 10,
+  },
+  calendarSlotStack: {
+    gap: 8,
   },
   chipRow: {
     flexDirection: "row",
@@ -1157,6 +1345,10 @@ const styles = StyleSheet.create({
   },
   previewText: {
     color: colors.textSecondary,
+  },
+  previewCard: {
+    marginBottom: 8,
+    borderColor: colors.primaryAction,
   },
   footerWrap: {
     position: "absolute",

@@ -1,9 +1,10 @@
 
 import { useEffect, useState } from "react";
 import { Modal, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { EVENT_CATEGORY_OPTIONS, EventCategory, formatCategoryLabel } from "../lib/crm";
-import { colors, layout, radius } from "../theme/tokens";
+import { layout, radius, useTheme, useThemedStyles } from "../theme/tokens";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { Typography } from "./ui/Typography";
@@ -13,6 +14,8 @@ export type CurrentEventValue = {
   category: EventCategory;
   eventDate?: string | null;
   customCategoryLabel?: string | null;
+  campaignSlug?: string | null;
+  isCampaignMode?: boolean;
 };
 
 type CurrentEventSheetProps = {
@@ -21,6 +24,7 @@ type CurrentEventSheetProps = {
   onClose: () => void;
   onSave: (value: CurrentEventValue) => void;
   onClear: () => void;
+  draftStorageKey?: string;
 };
 
 function formatCurrentEventType(value: CurrentEventValue | { category: EventCategory; customCategoryLabel?: string | null }) {
@@ -45,26 +49,86 @@ function getRelativeDateInputValue(offsetDays: number) {
   return toDateInputValue(date);
 }
 
-export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: CurrentEventSheetProps) {
+type CurrentEventDraft = {
+  name: string;
+  category: EventCategory;
+  eventDate: string;
+  customCategoryLabel: string;
+};
+
+export function CurrentEventSheet({ visible, value, onClose, onSave, onClear, draftStorageKey }: CurrentEventSheetProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 720;
   const [name, setName] = useState("");
   const [category, setCategory] = useState<EventCategory>("networking");
   const [eventDate, setEventDate] = useState("");
   const [customCategoryLabel, setCustomCategoryLabel] = useState("");
+  const [hasHydratedDraft, setHasHydratedDraft] = useState(false);
 
   useEffect(() => {
-    if (visible) {
-      setName(value?.name || "");
-      setCategory(value?.category || "networking");
-      setEventDate(value?.eventDate || "");
-      setCustomCategoryLabel(value?.customCategoryLabel || "");
+    if (!visible) {
+      return;
     }
-  }, [value, visible]);
+
+    let isMounted = true;
+
+    async function hydrateDraft() {
+      setHasHydratedDraft(false);
+      let savedDraft: CurrentEventDraft | null = null;
+      if (draftStorageKey) {
+        const rawDraft = await AsyncStorage.getItem(draftStorageKey);
+        if (rawDraft) {
+          try {
+            savedDraft = JSON.parse(rawDraft) as CurrentEventDraft;
+          } catch {
+            await AsyncStorage.removeItem(draftStorageKey);
+          }
+        }
+      }
+
+      if (!isMounted) {
+        return;
+      }
+
+      const draft = value ? null : savedDraft;
+      setName(value?.name ?? draft?.name ?? "");
+      setCategory(value?.category ?? draft?.category ?? "networking");
+      setEventDate(value?.eventDate ?? draft?.eventDate ?? "");
+      setCustomCategoryLabel(value?.customCategoryLabel ?? draft?.customCategoryLabel ?? "");
+      setHasHydratedDraft(true);
+    }
+
+    void hydrateDraft();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [draftStorageKey, value, visible]);
+
+  useEffect(() => {
+    if (!visible || !draftStorageKey || !hasHydratedDraft) {
+      return;
+    }
+
+    async function persistDraft() {
+      await AsyncStorage.setItem(
+        draftStorageKey as string,
+        JSON.stringify({ name, category, eventDate, customCategoryLabel } satisfies CurrentEventDraft)
+      );
+    }
+
+    void persistDraft();
+  }, [category, customCategoryLabel, draftStorageKey, eventDate, hasHydratedDraft, name, visible]);
 
   function handleSave() {
     if (!name.trim()) {
       return;
+    }
+
+    if (draftStorageKey) {
+      void AsyncStorage.removeItem(draftStorageKey);
     }
 
     onSave({
@@ -174,7 +238,7 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
 
           <View style={styles.footerButtons}>
             <Button label={isCompactLayout ? "Save event" : "Save Current Event"} onPress={handleSave} disabled={!name.trim()} />
-            <Button label={isCompactLayout ? "Clear event" : "End event mode"} onPress={onClear} variant="ghost" />
+            <Button label="Exit event mode" onPress={onClear} variant="ghost" />
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -182,7 +246,7 @@ export function CurrentEventSheet({ visible, value, onClose, onSave, onClear }: 
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useTheme>["colors"]) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,

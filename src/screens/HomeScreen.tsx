@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, View } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
 import { FloatingFab } from "../components/FloatingFab";
-import { LiveEventBadge } from "../components/LiveEventBadge";
 import { PersonQuickActionsButton } from "../components/PersonQuickActionsButton";
 import { CaptureModal, ParsedPersonDraft } from "./CaptureModal";
 import { Button } from "../components/ui/Button";
@@ -19,9 +19,11 @@ import {
   getOrCreateEvent,
   isContactStale,
   listPeopleInsights,
+  updatePersonDetails,
 } from "../lib/crm";
-import { colors, layout, radius } from "../theme/tokens";
+import { layout, radius, useTheme, useThemedStyles } from "../theme/tokens";
 import { PersonStatusMode } from "./PersonProfileScreen";
+import { captureAnalyticsEvent } from "../lib/analytics";
 
 type HomeScreenProps = {
   currentEvent: CurrentEventValue | null;
@@ -32,18 +34,26 @@ type HomeScreenProps = {
 
 type SignalFilter = "all" | "tracked" | "contactedToday" | "needNudge";
 
+const HOME_CAPTURE_OPEN_STORAGE_KEY = "blackbook.home_capture_open";
+const HOME_CAPTURE_DRAFT_STORAGE_KEY = "blackbook.home_capture_draft";
+const ACTIVE_SCREEN_STORAGE_KEY = "blackbook.active_screen";
+
 export function HomeScreen({
   currentEvent,
   onOpenPeopleFilter,
   showCaptureCoach = false,
   onCaptureCoachDone,
 }: HomeScreenProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [isCaptureOpen, setCaptureOpen] = useState(false);
+  const [editingPerson, setEditingPerson] = useState<Awaited<ReturnType<typeof listPeopleInsights>>[number] | null>(null);
   const [isSaving, setSaving] = useState(false);
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
   const [isLoading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeSignal, setActiveSignal] = useState<SignalFilter>("all");
+  const [hasHydratedCaptureState, setHasHydratedCaptureState] = useState(false);
 
   const recentPeople = useMemo(() => people.slice(0, 4), [people]);
   const dueTodayPeople = useMemo(
@@ -116,7 +126,39 @@ export function HomeScreen({
     loadData();
   }, []);
 
-  async function handleSaveDraft(draft: ParsedPersonDraft) {
+  useEffect(() => {
+    let isMounted = true;
+
+    async function hydrateCaptureState() {
+      const savedState = await AsyncStorage.getItem(HOME_CAPTURE_OPEN_STORAGE_KEY);
+      if (isMounted && savedState === "true") {
+        setCaptureOpen(true);
+      }
+      if (isMounted) {
+        setHasHydratedCaptureState(true);
+      }
+    }
+
+    void hydrateCaptureState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    async function persistCaptureState() {
+      if (!hasHydratedCaptureState) {
+        return;
+      }
+
+      await AsyncStorage.setItem(HOME_CAPTURE_OPEN_STORAGE_KEY, isCaptureOpen ? "true" : "false");
+    }
+
+    void persistCaptureState();
+  }, [hasHydratedCaptureState, isCaptureOpen]);
+
+  async function handleSaveDraft(draft: ParsedPersonDraft, options?: { addAnother?: boolean }) {
     if (isSaving) {
       return;
     }
@@ -124,6 +166,30 @@ export function HomeScreen({
     try {
       setSaving(true);
       const userId = await ensureSessionUserId();
+
+      if (editingPerson) {
+        await updatePersonDetails({
+          userId,
+          personId: editingPerson.id,
+          name: draft.name,
+          company: draft.company,
+          linkedinUrl: draft.linkedinUrl,
+          email: draft.email,
+          phoneNumber: draft.phoneNumber,
+          preferredChannel: draft.preferredChannel,
+          preferredChannelOther: draft.preferredChannelOther,
+          priority: draft.priority,
+          tags: draft.tags,
+        });
+
+        setEditingPerson(null);
+        setCaptureOpen(false);
+        await AsyncStorage.setItem(HOME_CAPTURE_OPEN_STORAGE_KEY, "false");
+        await loadData();
+        Alert.alert("Contact updated", `${draft.name} is up to date.`);
+        return;
+      }
+
       const person = await createPerson(
         userId,
         draft.name,
@@ -140,8 +206,9 @@ export function HomeScreen({
       let eventId: string | null = null;
       const eventName = currentEvent?.name || draft.event;
       const eventCategory = currentEvent?.category || draft.eventCategory || null;
+      const eventDate = currentEvent?.eventDate || null;
       if (eventName && eventName !== "No event") {
-        const event = await getOrCreateEvent(userId, eventName, eventCategory);
+        const event = await getOrCreateEvent(userId, eventName, eventCategory, eventDate);
         eventId = event.id;
       }
 
@@ -152,19 +219,54 @@ export function HomeScreen({
         rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
-      setCaptureOpen(false);
+      void captureAnalyticsEvent("contact_captured", {
+        surface: "home",
+        add_another: Boolean(options?.addAnother),
+        has_current_event: Boolean(currentEvent),
+        event_category: eventCategory || undefined,
+        follow_up_preset: draft.followUpPreset || undefined,
+        preferred_channel: draft.preferredChannel || undefined,
+        tags_count: draft.tags.length,
+        has_company: Boolean(draft.company),
+        has_linkedin: Boolean(draft.linkedinUrl),
+        has_email: Boolean(draft.email),
+        has_phone: Boolean(draft.phoneNumber),
+      });
+
+      if (!options?.addAnother) {
+        setCaptureOpen(false);
+        await AsyncStorage.setItem(HOME_CAPTURE_OPEN_STORAGE_KEY, "false");
+      }
       await loadData();
-      Alert.alert("Saved", `${draft.name} saved to Supabase.`);
+      if (!options?.addAnother) {
+        Alert.alert("Contact added", `${draft.name} saved${eventName && eventName !== "No event" ? ` to ${eventName}` : ""}.`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save interaction.";
-      Alert.alert("Save failed", message);
+      Alert.alert("Could not save contact", message);
     } finally {
       setSaving(false);
     }
   }
 
   function openCapture() {
+    setEditingPerson(null);
     onCaptureCoachDone?.();
+    void AsyncStorage.setItem(ACTIVE_SCREEN_STORAGE_KEY, "home");
+    void AsyncStorage.setItem(HOME_CAPTURE_OPEN_STORAGE_KEY, "true");
+    setCaptureOpen(true);
+  }
+
+  function closeCapture() {
+    void AsyncStorage.setItem(HOME_CAPTURE_OPEN_STORAGE_KEY, "false");
+    setEditingPerson(null);
+    setCaptureOpen(false);
+  }
+
+  function openEditPerson(person: (typeof people)[number]) {
+    setEditingPerson(person);
+    void AsyncStorage.setItem(ACTIVE_SCREEN_STORAGE_KEY, "home");
+    void AsyncStorage.setItem(HOME_CAPTURE_OPEN_STORAGE_KEY, "true");
     setCaptureOpen(true);
   }
 
@@ -182,12 +284,17 @@ export function HomeScreen({
             <View style={styles.statusPill}>
               <Typography variant="caption" style={styles.statusPillText}>{person.statusLabel}</Typography>
             </View>
-            <PersonQuickActionsButton person={person} onChanged={loadData} />
+            <PersonQuickActionsButton person={person} onChanged={loadData} onEdit={() => openEditPerson(person)} />
           </View>
         </View>
         <Typography variant="body" style={styles.cardBody} numberOfLines={2}>
           {person.nextStep || person.whatMatters || person.lastInteractionNote}
         </Typography>
+        {person.relationshipStatus ? (
+          <Typography variant="caption">
+            Status: {person.relationshipStatus}
+          </Typography>
+        ) : null}
         <Typography variant="caption">{person.bannerLabel}</Typography>
       </Card>
     );
@@ -215,7 +322,7 @@ export function HomeScreen({
           {currentEvent ? (
             <Card style={styles.currentEventCard}>
               <View style={styles.currentEventTopRow}>
-                <LiveEventBadge eventDate={currentEvent.eventDate} />
+                <Typography variant="caption">{currentEvent.isCampaignMode ? "Campaign event" : "Current event"}</Typography>
                 <Typography variant="caption">
                   {currentEvent.category === "other" && currentEvent.customCategoryLabel?.trim()
                     ? currentEvent.customCategoryLabel.trim()
@@ -226,8 +333,8 @@ export function HomeScreen({
               <Typography variant="body" style={styles.sectionMeta}>
                 {currentEvent.eventDate?.trim() ? `${currentEvent.eventDate.trim()} · ` : ""}
                 {currentEventSummary
-                  ? `${currentEventSummary.total} people added · ${currentEventSummary.outstanding} still need follow-up.`
-                  : "Any person saved now will be attached to this event."}
+                  ? `${currentEventSummary.total} people added · ${currentEventSummary.outstanding} still need follow-up. New captures will keep tagging to this event until you exit event mode.`
+                  : "Any person saved now will be attached to this event until you exit event mode."}
               </Typography>
             </Card>
           ) : null}
@@ -242,7 +349,10 @@ export function HomeScreen({
               <View style={styles.heroTopRow}>
                 <View style={styles.heroCopy}>
                   <Typography variant="caption" style={styles.heroCaption}>Pulse</Typography>
-                  <Typography variant="h2" style={styles.heroHeading}>Who needs you now</Typography>
+                  <Typography variant="h2" style={styles.heroHeading}>Today’s relationship queue</Typography>
+                  <Typography variant="body" style={styles.heroMeta}>
+                    Due and overdue follow-ups first, with shortcuts into the wider list.
+                  </Typography>
                 </View>
               {waitingOnYouCount ? (
                 <View style={styles.heroBadge}>
@@ -260,7 +370,8 @@ export function HomeScreen({
                 }}
               >
                 <Typography variant="h2" style={styles.heroMetric}>{people.length}</Typography>
-                <Typography variant="caption" style={styles.heroCaption}>People tracked</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>All contacts</Typography>
+                <Typography variant="caption" style={styles.tapCue}>Tap to view</Typography>
               </Pressable>
               <Pressable
                 style={[styles.signalCell, activeSignal === "contactedToday" ? styles.signalCellActive : null]}
@@ -270,7 +381,8 @@ export function HomeScreen({
                 }}
               >
                 <Typography variant="h2" style={styles.heroMetric}>{contactedTodayPeople.length}</Typography>
-                <Typography variant="caption" style={styles.heroCaption}>Reached out</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>Contacted today</Typography>
+                <Typography variant="caption" style={styles.tapCue}>Tap to view</Typography>
               </Pressable>
               <Pressable
                 style={[styles.signalCell, activeSignal === "needNudge" ? styles.signalCellActive : null]}
@@ -280,7 +392,8 @@ export function HomeScreen({
                 }}
               >
                 <Typography variant="h2" style={styles.heroMetric}>{nudgeCount}</Typography>
-                <Typography variant="caption" style={styles.heroCaption}>Need a nudge</Typography>
+                <Typography variant="caption" style={styles.heroCaption}>Needs attention</Typography>
+                <Typography variant="caption" style={styles.tapCue}>Tap to view</Typography>
               </Pressable>
             </View>
           </Card>
@@ -289,6 +402,9 @@ export function HomeScreen({
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Typography variant="caption">Due today</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  Follow-ups scheduled for today.
+                </Typography>
               </View>
               {dueTodayPeople.map((person) => renderPersonCard(person, "muted"))}
             </View>
@@ -298,6 +414,9 @@ export function HomeScreen({
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Typography variant="caption">Overdue</Typography>
+                <Typography variant="body" style={styles.sectionMeta}>
+                  Follow-ups with dates before today.
+                </Typography>
               </View>
               {overduePeople.map((person) => renderPersonCard(person, "muted"))}
             </View>
@@ -306,6 +425,9 @@ export function HomeScreen({
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Typography variant="caption">Recently connected</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Latest people you captured or updated.
+              </Typography>
             </View>
 
             {recentPeople.map((person) => renderPersonCard(person))}
@@ -317,6 +439,9 @@ export function HomeScreen({
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Typography variant="caption">Needs follow-up</Typography>
+              <Typography variant="body" style={styles.sectionMeta}>
+                Stale high-priority relationships that may need a nudge.
+              </Typography>
             </View>
             {followUpPeople.map((person) => renderPersonCard(person, "muted"))}
             {!isLoading && followUpPeople.length === 0 ? (
@@ -348,19 +473,39 @@ export function HomeScreen({
 
         <CaptureModal
           visible={isCaptureOpen}
-          onClose={() => setCaptureOpen(false)}
+          onClose={closeCapture}
           onSave={handleSaveDraft}
+          saveLabel={editingPerson ? "Save Changes" : "Save & Close"}
           isSaving={isSaving}
           lockedEvent={currentEvent}
+          initialDraft={editingPerson ? {
+            name: editingPerson.name,
+            priority: editingPerson.priority,
+            tags: editingPerson.tags,
+            company: editingPerson.company,
+            linkedinUrl: editingPerson.linkedinUrl,
+            email: editingPerson.email,
+            phoneNumber: editingPerson.phoneNumber,
+            preferredChannel: editingPerson.preferredChannel,
+            preferredChannelOther: editingPerson.preferredChannelOther,
+            event: editingPerson.lastEventName || "",
+            whatMatters: editingPerson.whatMatters || editingPerson.lastInteractionNote,
+            nextStep: editingPerson.nextStep || "",
+            nextFollowUpAt: editingPerson.nextFollowUpAt || "",
+            followUpPreset: "",
+          } : null}
           initialMethod="manual"
-          showQuickCapture
+          showQuickCapture={!editingPerson}
+          showSaveAndAddAnother={!editingPerson}
+          draftStorageKey={HOME_CAPTURE_DRAFT_STORAGE_KEY}
+          autosaveWithInitialDraft={Boolean(editingPerson)}
         />
       </View>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useTheme>["colors"]) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
@@ -438,7 +583,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   heroHeading: {
-    color: colors.background,
+    color: colors.onPrimary,
   },
   heroBadge: {
     borderRadius: radius.pill,
@@ -447,7 +592,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   heroBadgeText: {
-    color: colors.background,
+    color: colors.onPrimary,
   },
   bannerCard: {
     gap: 10,
@@ -460,6 +605,8 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "rgba(255,255,255,0.08)",
     borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
     padding: 14,
     gap: 6,
   },
@@ -469,10 +616,17 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.35)",
   },
   heroMetric: {
-    color: colors.background,
+    color: colors.onPrimary,
   },
   heroCaption: {
     color: "rgba(246,243,238,0.76)",
+  },
+  heroMeta: {
+    color: "rgba(255,255,255,0.88)",
+  },
+  tapCue: {
+    color: "rgba(255,255,255,0.9)",
+    marginTop: 2,
   },
   section: {
     gap: 12,

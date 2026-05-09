@@ -5,13 +5,14 @@ import { SafeAreaView, StyleSheet, TextInput, View } from "react-native";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Typography } from "../components/ui/Typography";
-import { sendMagicLink, signInWithGoogle } from "../lib/auth";
-import { colors, layout, radius } from "../theme/tokens";
+import { sendEmailCode, signInWithGoogle, verifyEmailCode } from "../lib/auth";
+import { layout, radius, useTheme, useThemedStyles } from "../theme/tokens";
 
 type AuthScreenProps = {
   authError?: string | null;
   onAuthenticated?: (message: string) => void;
   onCancel?: () => void;
+  inviteEventLabel?: string | null;
 };
 
 type BannerState = {
@@ -23,15 +24,24 @@ export function AuthScreen({
   authError = null,
   onAuthenticated,
   onCancel,
+  inviteEventLabel = null,
 }: AuthScreenProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [email, setEmail] = useState("");
+  const [emailCode, setEmailCode] = useState("");
+  const [sentEmail, setSentEmail] = useState("");
   const [banner, setBanner] = useState<BannerState>(authError ? { text: authError, tone: "error" } : null);
   const [isGoogleBusy, setGoogleBusy] = useState(false);
-  const [isMagicLinkBusy, setMagicLinkBusy] = useState(false);
+  const [isEmailCodeBusy, setEmailCodeBusy] = useState(false);
+  const [isVerifyBusy, setVerifyBusy] = useState(false);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
-  const canSendMagicLink = normalizedEmail.includes("@");
-  const isBusy = isGoogleBusy || isMagicLinkBusy;
+  const normalizedCode = useMemo(() => emailCode.replace(/\s+/g, ""), [emailCode]);
+  const canSendEmailCode = normalizedEmail.includes("@");
+  const canVerifyCode = sentEmail.includes("@") && normalizedCode.length >= 6;
+  const isCodeSent = Boolean(sentEmail);
+  const isBusy = isGoogleBusy || isEmailCodeBusy || isVerifyBusy;
 
   async function handleGoogle() {
     try {
@@ -44,19 +54,39 @@ export function AuthScreen({
     }
   }
 
-  async function handleMagicLink() {
+  async function handleSendEmailCode() {
     try {
-      setMagicLinkBusy(true);
+      setEmailCodeBusy(true);
       setBanner(null);
-      await sendMagicLink(normalizedEmail);
-      const message = `Magic link sent to ${normalizedEmail}. Check your inbox to continue.`;
+      await sendEmailCode(normalizedEmail);
+      setSentEmail(normalizedEmail);
+      setEmailCode("");
+      const message = `Code sent to ${normalizedEmail}. Enter it here to continue. Check junk mail if it does not land in your inbox.`;
       setBanner({ text: message, tone: "success" });
-      onAuthenticated?.(message);
     } catch (error) {
-      setBanner({ text: error instanceof Error ? error.message : "Could not send magic link.", tone: "error" });
+      setBanner({ text: error instanceof Error ? error.message : "Could not send the email code.", tone: "error" });
     } finally {
-      setMagicLinkBusy(false);
+      setEmailCodeBusy(false);
     }
+  }
+
+  async function handleVerifyEmailCode() {
+    try {
+      setVerifyBusy(true);
+      setBanner(null);
+      await verifyEmailCode(sentEmail, normalizedCode);
+      onAuthenticated?.("Signed in.");
+    } catch (error) {
+      setBanner({ text: error instanceof Error ? error.message : "Could not verify that code.", tone: "error" });
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  function handleChangeEmail() {
+    setSentEmail("");
+    setEmailCode("");
+    setBanner(null);
   }
 
   return (
@@ -75,24 +105,62 @@ export function AuthScreen({
           </Typography>
         </View>
 
-        <Card style={styles.modeCard}>
-          <View style={styles.inputBlock}>
-            <Typography variant="caption">Email for magic link</Typography>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoComplete="email"
-              keyboardType="email-address"
-              value={email}
-              onChangeText={setEmail}
-              placeholder="wez@example.com"
-              placeholderTextColor={colors.textTertiary}
-              style={styles.input}
-            />
+        {inviteEventLabel ? (
+          <Card style={styles.inviteEventCard}>
+            <Typography variant="caption">Event link active</Typography>
+            <Typography variant="h2">{inviteEventLabel}</Typography>
             <Typography variant="body" style={styles.helperText}>
-              Passwordless sign-in keeps people coming back without losing their progress.
+              Sign in and Capture will automatically attach new contacts to this event.
             </Typography>
-          </View>
+          </Card>
+        ) : null}
+
+        <Card style={styles.modeCard}>
+          {!isCodeSent ? (
+            <View style={styles.inputBlock}>
+              <Typography variant="caption">Email for sign-in code</Typography>
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                keyboardType="email-address"
+                value={email}
+                onChangeText={setEmail}
+                placeholder="wez@example.com"
+                placeholderTextColor={colors.textTertiary}
+                style={styles.input}
+              />
+              <Typography variant="body" style={styles.helperText}>
+                We will email a short code so you can sign in without leaving this screen. Check junk mail if it does not show up in your inbox.
+              </Typography>
+            </View>
+          ) : (
+            <View style={styles.inputBlock}>
+              <View style={styles.codeHeaderRow}>
+                <View style={styles.codeHeaderCopy}>
+                  <Typography variant="caption">Enter email code</Typography>
+                  <Typography variant="body" style={styles.helperText}>
+                    Sent to {sentEmail}. Paste the code from your email below.
+                  </Typography>
+                </View>
+                <Button label="Change" onPress={handleChangeEmail} variant="ghost" fullWidth={false} size="compact" disabled={isBusy} />
+              </View>
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="one-time-code"
+                keyboardType="number-pad"
+                value={emailCode}
+                onChangeText={setEmailCode}
+                placeholder="123456"
+                placeholderTextColor={colors.textTertiary}
+                style={[styles.input, styles.codeInput]}
+              />
+              <Typography variant="body" style={styles.helperText}>
+                Codes can take a minute. Check junk mail if it is not in your inbox.
+              </Typography>
+            </View>
+          )}
 
           {banner ? (
             <View
@@ -108,12 +176,30 @@ export function AuthScreen({
           ) : null}
 
           <View style={styles.actionStack}>
-            <Button
-              label="Email me a magic link"
-              onPress={() => void handleMagicLink()}
-              disabled={!canSendMagicLink || isBusy}
-              loading={isMagicLinkBusy}
-            />
+            {!isCodeSent ? (
+              <Button
+                label="Email me a sign-in code"
+                onPress={() => void handleSendEmailCode()}
+                disabled={!canSendEmailCode || isBusy}
+                loading={isEmailCodeBusy}
+              />
+            ) : (
+              <>
+                <Button
+                  label="Verify code"
+                  onPress={() => void handleVerifyEmailCode()}
+                  disabled={!canVerifyCode || isBusy}
+                  loading={isVerifyBusy}
+                />
+                <Button
+                  label="Resend code"
+                  onPress={() => void handleSendEmailCode()}
+                  variant="ghost"
+                  disabled={isBusy}
+                  loading={isEmailCodeBusy}
+                />
+              </>
+            )}
             <Button
               label="Continue with Google"
               onPress={() => void handleGoogle()}
@@ -125,8 +211,8 @@ export function AuthScreen({
 
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
-              <Typography variant="caption">Magic link</Typography>
-              <Typography variant="body" style={styles.metaText}>Fast return on the same device</Typography>
+              <Typography variant="caption">Email code</Typography>
+              <Typography variant="body" style={styles.metaText}>Same screen, no browser hop</Typography>
             </View>
             <View style={styles.metaItem}>
               <Typography variant="caption">Google</Typography>
@@ -145,7 +231,7 @@ export function AuthScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useTheme>["colors"]) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
@@ -189,8 +275,22 @@ const styles = StyleSheet.create({
   modeCard: {
     gap: 16,
   },
+  inviteEventCard: {
+    gap: 8,
+    borderColor: colors.primaryAction,
+  },
   inputBlock: {
     gap: 8,
+  },
+  codeHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  codeHeaderCopy: {
+    flex: 1,
+    gap: 4,
   },
   input: {
     minHeight: 52,
@@ -201,6 +301,11 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingHorizontal: 16,
     fontSize: 16,
+  },
+  codeInput: {
+    fontSize: 22,
+    letterSpacing: 0,
+    textAlign: "center",
   },
   helperText: {
     color: colors.textSecondary,

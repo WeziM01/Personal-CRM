@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, AppState, Linking, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 
 import { CurrentEventValue } from "../components/CurrentEventSheet";
@@ -31,16 +32,44 @@ import {
   updatePersonDetails,
   isContactStale,
 } from "../lib/crm";
-import { colors, layout } from "../theme/tokens";
-import { openFollowUpInCalendar } from "../lib/calendar";
+import { layout, useTheme, useThemedStyles } from "../theme/tokens";
+import { CalendarDestination, CalendarSuggestedSlot, getAvailableCalendarDestinations, getFollowUpSlotSuggestions, openFollowUpInCalendar } from "../lib/calendar";
 import { clearPendingExternalAction, getPendingExternalAction, PendingExternalAction, setPendingExternalAction } from "../lib/externalActionFlow";
+import { captureAnalyticsEvent } from "../lib/analytics";
 
 type SortMode = "recent" | "stale" | "name" | "frequency";
 type CaptureMode = "createInteraction" | "createPerson" | "edit";
 type DraftPreviewDestination = "whatsapp" | "linkedin";
 type UpdateInteractionType = "met" | "called" | "emailed" | "messaged" | "followedUp" | "introduced";
 type UpdateStatus = "warm" | "needsAction" | "waiting" | "doneForNow";
+type PeopleView = "needsFollowUp" | "recentlyMet" | "allContacts";
+type FollowUpOutcome = "Sent" | "Replied" | "No response" | "Converted" | "Not relevant";
 export type PersonStatusMode = "all" | "today" | "recent" | "stale";
+
+type UpdateDraftState = {
+  interactionType: UpdateInteractionType;
+  shortNote: string;
+  nextStep: string;
+  dueDate: string;
+  status: UpdateStatus;
+};
+
+type SavedPeopleCaptureState = {
+  isOpen: boolean;
+  mode: CaptureMode;
+  selectedPersonId: string | null;
+  draft: Partial<ParsedPersonDraft> | null;
+};
+
+type SavedLogUpdateState = {
+  isOpen: boolean;
+  personId: string | null;
+  draft: UpdateDraftState;
+};
+
+const PEOPLE_CAPTURE_STATE_STORAGE_KEY = "blackbook.people_capture_state";
+const PEOPLE_CAPTURE_DRAFT_STORAGE_KEY = "blackbook.people_capture_draft";
+const PEOPLE_LOG_UPDATE_STATE_STORAGE_KEY = "blackbook.people_log_update_state";
 
 const interactionTypeOptions: Array<{ label: string; value: UpdateInteractionType }> = [
   { label: "Met", value: "met" },
@@ -69,6 +98,8 @@ export function PersonProfileScreen({
   forcedStatusMode = null,
   forcedStatusNonce = 0,
 }: PersonProfileScreenProps) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 720;
   const [isCaptureOpen, setCaptureOpen] = useState(false);
@@ -78,17 +109,21 @@ export function PersonProfileScreen({
   const [editorDraft, setEditorDraft] = useState<Partial<ParsedPersonDraft> | null>(null);
   const [isUpdateModalOpen, setUpdateModalOpen] = useState(false);
   const [updatePerson, setUpdatePerson] = useState<(typeof people)[number] | null>(null);
-  const [updateDraft, setUpdateDraft] = useState({
+  const [updateDraft, setUpdateDraft] = useState<UpdateDraftState>({
     interactionType: "met" as UpdateInteractionType,
     shortNote: "",
     nextStep: "",
     dueDate: "",
     status: "warm" as UpdateStatus,
   });
+  const [hasHydratedPeopleCaptureState, setHasHydratedPeopleCaptureState] = useState(false);
+  const [hasHydratedLogUpdateState, setHasHydratedLogUpdateState] = useState(false);
+  const [pendingUpdatePersonId, setPendingUpdatePersonId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("name");
   const [statusMode, setStatusMode] = useState<PersonStatusMode>("all");
+  const [peopleView, setPeopleView] = useState<PeopleView>("needsFollowUp");
   const [categoryMode, setCategoryMode] = useState<(typeof EVENT_CATEGORY_OPTIONS)[number]["value"]>("all");
   const [selectedTag, setSelectedTag] = useState<string>("all");
   const [people, setPeople] = useState<Awaited<ReturnType<typeof listPeopleInsights>>>([]);
@@ -101,10 +136,16 @@ export function PersonProfileScreen({
   const [isInteractionPickerOpen, setInteractionPickerOpen] = useState(false);
   const [pendingExternalAction, setPendingExternalActionState] = useState<PendingExternalAction | null>(null);
   const [showPendingExternalReturn, setShowPendingExternalReturn] = useState(false);
+  const [calendarPickerPerson, setCalendarPickerPerson] = useState<(typeof people)[number] | null>(null);
+  const [followUpPerson, setFollowUpPerson] = useState<(typeof people)[number] | null>(null);
+  const [followUpMessage, setFollowUpMessage] = useState("");
+  const [updateCalendarSlots, setUpdateCalendarSlots] = useState<CalendarSuggestedSlot[]>([]);
+  const [isCheckingUpdateCalendar, setCheckingUpdateCalendar] = useState(false);
 
   const availableTags = useMemo(() => {
     return Array.from(new Set([...PERSON_TAG_SUGGESTIONS, ...people.flatMap((person) => person.tags)])).sort();
   }, [people]);
+  const calendarDestinationOptions = useMemo(() => getAvailableCalendarDestinations(), []);
 
   const sortLabel =
     sortMode === "name"
@@ -115,14 +156,40 @@ export function PersonProfileScreen({
           ? "Need nudge first"
           : "Most logged";
 
+  function isRecentlyMet(person: (typeof people)[number]) {
+    const createdAt = new Date(person.createdAt).getTime();
+    if (Number.isNaN(createdAt)) {
+      return false;
+    }
+
+    return Date.now() - createdAt <= 7 * 24 * 60 * 60 * 1000;
+  }
+
+  function needsFollowUp(person: (typeof people)[number]) {
+    return (
+      person.followUpState === "overdue" ||
+      person.followUpState === "dueToday" ||
+      (person.priority === "high" && isContactStale(person.daysSinceLastContact, person.priority)) ||
+      (isRecentlyMet(person) && !person.nextStep.trim())
+    );
+  }
+
   const filteredPeople = useMemo(() => {
-    const statusFiltered = people.filter((person) => {
+    const categoryFiltered = people.filter(
+      (person) => categoryMode === "all" || person.lastEventCategory === categoryMode
+    );
+
+    const tagFiltered = categoryFiltered.filter(
+      (person) => selectedTag === "all" || person.tags.includes(selectedTag)
+    );
+
+    const statusFiltered = tagFiltered.filter((person) => {
       if (statusMode === "today") {
-        return person.daysSinceLastContact !== null && person.daysSinceLastContact <= JUST_CONNECTED_THRESHOLD;
+        return (person.daysSinceLastContact || 0) <= JUST_CONNECTED_THRESHOLD;
       }
 
       if (statusMode === "recent") {
-        return person.daysSinceLastContact !== null && person.daysSinceLastContact <= RECENT_CONTACT_THRESHOLD;
+        return (person.daysSinceLastContact || 0) <= RECENT_CONTACT_THRESHOLD;
       }
 
       if (statusMode === "stale") {
@@ -132,18 +199,10 @@ export function PersonProfileScreen({
       return true;
     });
 
-    const categoryFiltered = statusFiltered.filter(
-      (person) => categoryMode === "all" || person.lastEventCategory === categoryMode
-    );
-
-    const tagFiltered = categoryFiltered.filter(
-      (person) => selectedTag === "all" || person.tags.includes(selectedTag)
-    );
-
     const query = searchQuery.trim().toLowerCase();
     const searchedPeople = !query
-      ? tagFiltered
-      : tagFiltered.filter((person) =>
+      ? statusFiltered
+      : statusFiltered.filter((person) =>
           [person.name, person.company, person.lastInteractionNote, person.followUp, person.lastEventName || "", person.tags.join(" ")]
             .join(" ")
             .toLowerCase()
@@ -169,13 +228,33 @@ export function PersonProfileScreen({
     });
   }, [categoryMode, people, searchQuery, selectedTag, sortMode, statusMode]);
 
+  const visiblePeople = useMemo(() => {
+    if (peopleView === "needsFollowUp") {
+      return filteredPeople.filter(needsFollowUp);
+    }
+
+    if (peopleView === "recentlyMet") {
+      return filteredPeople.filter(isRecentlyMet);
+    }
+
+    return filteredPeople;
+  }, [filteredPeople, peopleView]);
+
+  const attentionCounts = useMemo(() => {
+    return {
+      needsFollowUp: filteredPeople.filter(needsFollowUp).length,
+      recentlyMet: filteredPeople.filter(isRecentlyMet).length,
+      allContacts: filteredPeople.length,
+    };
+  }, [filteredPeople]);
+
   const selectedPerson = useMemo(() => {
     if (selectedPersonId) {
-      return filteredPeople.find((person) => person.id === selectedPersonId) || null;
+      return visiblePeople.find((person) => person.id === selectedPersonId) || null;
     }
     // Only show a selected contact if the user has manually selected one
     return null;
-  }, [filteredPeople, isCompactLayout, selectedPersonId]);
+  }, [isCompactLayout, selectedPersonId, visiblePeople]);
 
   async function loadProfileData() {
     try {
@@ -205,11 +284,142 @@ export function PersonProfileScreen({
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
+    async function hydratePeopleCaptureState() {
+      const rawState = await AsyncStorage.getItem(PEOPLE_CAPTURE_STATE_STORAGE_KEY);
+      if (!rawState) {
+        if (isMounted) {
+          setHasHydratedPeopleCaptureState(true);
+        }
+        return;
+      }
+
+      try {
+        const savedState = JSON.parse(rawState) as SavedPeopleCaptureState;
+        if (isMounted && savedState.isOpen) {
+          setEditorMode(savedState.mode);
+          setEditorDraft(savedState.draft);
+          setSelectedPersonId(savedState.selectedPersonId);
+          setCaptureOpen(true);
+        }
+      } catch {
+        await AsyncStorage.removeItem(PEOPLE_CAPTURE_STATE_STORAGE_KEY);
+        await AsyncStorage.removeItem(PEOPLE_CAPTURE_DRAFT_STORAGE_KEY);
+      } finally {
+        if (isMounted) {
+          setHasHydratedPeopleCaptureState(true);
+        }
+      }
+    }
+
+    void hydratePeopleCaptureState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasHydratedPeopleCaptureState) {
+      return;
+    }
+
+    async function persistPeopleCaptureState() {
+      const payload: SavedPeopleCaptureState = {
+        isOpen: isCaptureOpen,
+        mode: editorMode,
+        selectedPersonId,
+        draft: editorDraft,
+      };
+      await AsyncStorage.setItem(PEOPLE_CAPTURE_STATE_STORAGE_KEY, JSON.stringify(payload));
+    }
+
+    void persistPeopleCaptureState();
+  }, [editorDraft, editorMode, hasHydratedPeopleCaptureState, isCaptureOpen, selectedPersonId]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function hydrateLogUpdateState() {
+      const rawState = await AsyncStorage.getItem(PEOPLE_LOG_UPDATE_STATE_STORAGE_KEY);
+      if (!rawState) {
+        if (isMounted) {
+          setHasHydratedLogUpdateState(true);
+        }
+        return;
+      }
+
+      try {
+        const savedState = JSON.parse(rawState) as SavedLogUpdateState;
+        if (isMounted && savedState.isOpen) {
+          setUpdateDraft(savedState.draft);
+          setPendingUpdatePersonId(savedState.personId);
+          setUpdateModalOpen(true);
+        }
+      } catch {
+        await AsyncStorage.removeItem(PEOPLE_LOG_UPDATE_STATE_STORAGE_KEY);
+      } finally {
+        if (isMounted) {
+          setHasHydratedLogUpdateState(true);
+        }
+      }
+    }
+
+    void hydrateLogUpdateState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingUpdatePersonId || !people.length) {
+      return;
+    }
+
+    const restoredPerson = people.find((person) => person.id === pendingUpdatePersonId);
+    if (restoredPerson) {
+      setUpdatePerson(restoredPerson);
+      setPendingUpdatePersonId(null);
+    }
+  }, [pendingUpdatePersonId, people]);
+
+  useEffect(() => {
+    if (!hasHydratedLogUpdateState) {
+      return;
+    }
+
+    async function persistLogUpdateState() {
+      const payload: SavedLogUpdateState = {
+        isOpen: isUpdateModalOpen,
+        personId: updatePerson?.id || pendingUpdatePersonId,
+        draft: updateDraft,
+      };
+      await AsyncStorage.setItem(PEOPLE_LOG_UPDATE_STATE_STORAGE_KEY, JSON.stringify(payload));
+    }
+
+    void persistLogUpdateState();
+  }, [hasHydratedLogUpdateState, isUpdateModalOpen, pendingUpdatePersonId, updateDraft, updatePerson?.id]);
+
+  useEffect(() => {
     if (!forcedStatusMode) {
       return;
     }
 
     setStatusMode(forcedStatusMode);
+    if (forcedStatusMode === "today") {
+      setPeopleView("allContacts");
+    }
+    if (forcedStatusMode === "stale") {
+      setPeopleView("needsFollowUp");
+    }
+    if (forcedStatusMode === "recent") {
+      setPeopleView("recentlyMet");
+    }
+    if (forcedStatusMode === "all") {
+      setPeopleView("allContacts");
+    }
   }, [forcedStatusMode, forcedStatusNonce]);
 
   useEffect(() => {
@@ -274,6 +484,28 @@ export function PersonProfileScreen({
     setShowPendingExternalReturn(false);
   }
 
+  async function clearPeopleCaptureState() {
+    await AsyncStorage.removeItem(PEOPLE_CAPTURE_STATE_STORAGE_KEY);
+    await AsyncStorage.removeItem(PEOPLE_CAPTURE_DRAFT_STORAGE_KEY);
+  }
+
+  async function clearLogUpdateState() {
+    await AsyncStorage.removeItem(PEOPLE_LOG_UPDATE_STATE_STORAGE_KEY);
+  }
+
+  function closePeopleCapture() {
+    void clearPeopleCaptureState();
+    setCaptureOpen(false);
+  }
+
+  function closeLogUpdate() {
+    void clearLogUpdateState();
+    setUpdateModalOpen(false);
+    setUpdatePerson(null);
+    setPendingUpdatePersonId(null);
+    setUpdateCalendarSlots([]);
+  }
+
   function getDefaultUpdateStatus(person: (typeof people)[number]): UpdateStatus {
     if (person.followUpState === "dueToday" || person.followUpState === "overdue") {
       return "needsAction";
@@ -287,15 +519,21 @@ export function PersonProfileScreen({
   }
 
   function openLogUpdateForPerson(person: (typeof people)[number]) {
-    setSelectedPersonId(person.id);
-    setUpdatePerson(person);
-    setUpdateDraft({
+    const nextDraft: UpdateDraftState = {
       interactionType: currentEvent ? "met" : "called",
       shortNote: "",
       nextStep: person.nextStep || "",
       dueDate: person.nextFollowUpAt || "",
       status: getDefaultUpdateStatus(person),
-    });
+    };
+    setSelectedPersonId(person.id);
+    setUpdatePerson(person);
+    setUpdateDraft(nextDraft);
+    setUpdateCalendarSlots([]);
+    void AsyncStorage.setItem(
+      PEOPLE_LOG_UPDATE_STATE_STORAGE_KEY,
+      JSON.stringify({ isOpen: true, personId: person.id, draft: nextDraft } satisfies SavedLogUpdateState)
+    );
     setUpdateModalOpen(true);
   }
 
@@ -305,7 +543,7 @@ export function PersonProfileScreen({
       return;
     }
 
-    if (!filteredPeople.length) {
+    if (!visiblePeople.length) {
       openCreatePerson("");
       return;
     }
@@ -314,8 +552,7 @@ export function PersonProfileScreen({
   }
 
   function openCreatePerson(initialName = searchQuery.trim()) {
-    setEditorMode("createPerson");
-    setEditorDraft({
+    const nextDraft: Partial<ParsedPersonDraft> = {
       name: initialName,
       priority: "medium",
       tags: [],
@@ -329,7 +566,13 @@ export function PersonProfileScreen({
       nextStep: "",
       nextFollowUpAt: "",
       followUpPreset: "",
-    });
+    };
+    setEditorMode("createPerson");
+    setEditorDraft(nextDraft);
+    void AsyncStorage.setItem(
+      PEOPLE_CAPTURE_STATE_STORAGE_KEY,
+      JSON.stringify({ isOpen: true, mode: "createPerson", selectedPersonId: null, draft: nextDraft } satisfies SavedPeopleCaptureState)
+    );
     setCaptureOpen(true);
   }
 
@@ -348,9 +591,7 @@ export function PersonProfileScreen({
       return;
     }
 
-    setSelectedPersonId(person.id);
-    setEditorMode("edit");
-    setEditorDraft({
+    const nextDraft: Partial<ParsedPersonDraft> = {
       name: person.name,
       priority: person.priority,
       tags: person.tags,
@@ -365,7 +606,14 @@ export function PersonProfileScreen({
       nextStep: person.nextStep || "",
       nextFollowUpAt: person.nextFollowUpAt || "",
       followUpPreset: "",
-    });
+    };
+    setSelectedPersonId(person.id);
+    setEditorMode("edit");
+    setEditorDraft(nextDraft);
+    void AsyncStorage.setItem(
+      PEOPLE_CAPTURE_STATE_STORAGE_KEY,
+      JSON.stringify({ isOpen: true, mode: "edit", selectedPersonId: person.id, draft: nextDraft } satisfies SavedPeopleCaptureState)
+    );
     setCaptureOpen(true);
   }
 
@@ -393,6 +641,25 @@ export function PersonProfileScreen({
     }
 
     return lines.filter(Boolean).join("\n");
+  }
+
+  async function handleCheckUpdateCalendarSlots() {
+    try {
+      setCheckingUpdateCalendar(true);
+      const slots = await getFollowUpSlotSuggestions();
+      setUpdateCalendarSlots(slots);
+    } catch (error) {
+      Alert.alert("Calendar check failed", error instanceof Error ? error.message : "Use a preset or custom date instead.");
+    } finally {
+      setCheckingUpdateCalendar(false);
+    }
+  }
+
+  function handleUpdateCalendarSlotSelect(slot: CalendarSuggestedSlot) {
+    setUpdateDraft((current) => ({
+      ...current,
+      dueDate: slot.dateOnly,
+    }));
   }
 
   async function handleSaveUpdate() {
@@ -427,19 +694,29 @@ export function PersonProfileScreen({
         rawNote: buildUpdateRecord(),
       });
 
+      void captureAnalyticsEvent("interaction_logged", {
+        surface: "people_log_update",
+        interaction_type: updateDraft.interactionType,
+        status: updateDraft.status,
+        has_due_date: Boolean(updateDraft.dueDate),
+        has_next_step: Boolean(updateDraft.nextStep),
+      });
+
       setUpdateModalOpen(false);
       setUpdatePerson(null);
+      setPendingUpdatePersonId(null);
+      await clearLogUpdateState();
       await loadProfileData();
-      Alert.alert("Update logged", `${updatePerson.name}'s timeline has been updated.`);
+      Alert.alert("Update logged", `${updatePerson.name}'s timeline is up to date.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to log update.";
-      Alert.alert("Save failed", message);
+      Alert.alert("Could not log update", message);
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleSaveInteraction(draft: ParsedPersonDraft) {
+  async function handleSaveInteraction(draft: ParsedPersonDraft, options?: { addAnother?: boolean }) {
     if (isSaving) {
       return;
     }
@@ -471,7 +748,11 @@ export function PersonProfileScreen({
         let eventId: string | null = null;
         const editEventName = draft.event;
         if (editEventName && editEventName !== "No event") {
-          eventId = (await getOrCreateEvent(userId, editEventName, draft.eventCategory || null)).id;
+          const editEventDate =
+            currentEvent?.name.trim().toLowerCase() === editEventName.trim().toLowerCase()
+              ? currentEvent.eventDate || null
+              : null;
+          eventId = (await getOrCreateEvent(userId, editEventName, draft.eventCategory || null, editEventDate)).id;
         }
 
         const rawNote = buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt);
@@ -492,9 +773,23 @@ export function PersonProfileScreen({
           });
         }
 
-        setCaptureOpen(false);
+        if (!options?.addAnother) {
+          setCaptureOpen(false);
+          await clearPeopleCaptureState();
+        }
         await loadProfileData();
-        Alert.alert("Saved", `${draft.name} updated.`);
+        void captureAnalyticsEvent("contact_updated", {
+          surface: "people_edit",
+          preferred_channel: draft.preferredChannel || undefined,
+          tags_count: draft.tags.length,
+          has_company: Boolean(draft.company),
+          has_linkedin: Boolean(draft.linkedinUrl),
+          has_email: Boolean(draft.email),
+          has_phone: Boolean(draft.phoneNumber),
+        });
+        if (!options?.addAnother) {
+          Alert.alert("Contact updated", `${draft.name} is ready for follow-up.`);
+        }
         return;
       }
 
@@ -533,8 +828,9 @@ export function PersonProfileScreen({
       let eventId: string | null = null;
       const eventName = currentEvent?.name || draft.event;
       const eventCategory = currentEvent?.category || draft.eventCategory || null;
+      const eventDate = currentEvent?.eventDate || null;
       if (eventName && eventName !== "No event") {
-        eventId = (await getOrCreateEvent(userId, eventName, eventCategory)).id;
+        eventId = (await getOrCreateEvent(userId, eventName, eventCategory, eventDate)).id;
       }
 
       if (!activePersonId) {
@@ -548,12 +844,31 @@ export function PersonProfileScreen({
         rawNote: buildInteractionRecord(draft.whatMatters, draft.nextStep, draft.company, draft.nextFollowUpAt),
       });
 
-      setCaptureOpen(false);
+      void captureAnalyticsEvent(editorMode === "createPerson" || !selectedPerson ? "contact_captured" : "interaction_logged", {
+        surface: "people",
+        add_another: Boolean(options?.addAnother),
+        has_current_event: Boolean(currentEvent),
+        event_category: eventCategory || undefined,
+        follow_up_preset: draft.followUpPreset || undefined,
+        preferred_channel: draft.preferredChannel || undefined,
+        tags_count: draft.tags.length,
+        has_company: Boolean(draft.company),
+        has_linkedin: Boolean(draft.linkedinUrl),
+        has_email: Boolean(draft.email),
+        has_phone: Boolean(draft.phoneNumber),
+      });
+
+      if (!options?.addAnother) {
+        setCaptureOpen(false);
+        await clearPeopleCaptureState();
+      }
       await loadProfileData();
-      Alert.alert("Added", "Interaction added to timeline.");
+      if (!options?.addAnother) {
+        Alert.alert("Timeline updated", selectedPerson ? `${selectedPerson.name}'s next step is saved.` : "New contact added with context.");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save interaction.";
-      Alert.alert("Save failed", message);
+      Alert.alert("Could not save update", message);
     } finally {
       setSaving(false);
     }
@@ -572,10 +887,15 @@ export function PersonProfileScreen({
       const userId = await ensureSessionUserId();
       await markPersonContactedToday(userId, person.id);
       await loadProfileData();
-      Alert.alert("Updated", `${person.name} marked as contacted today.`);
+      void captureAnalyticsEvent("marked_contacted", {
+        surface: "people",
+        follow_up_state: person.followUpState,
+        preferred_channel: person.preferredChannel || undefined,
+      });
+      Alert.alert("Marked contacted", `${person.name} is up to date for today.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to mark contact.";
-      Alert.alert("Update failed", message);
+      Alert.alert("Could not mark contacted", message);
     }
   }
 
@@ -672,15 +992,46 @@ export function PersonProfileScreen({
       return;
     }
 
+    setCalendarPickerPerson(person);
+  }
+
+  async function handleCalendarDestinationSelect(destination: CalendarDestination) {
+    const person = calendarPickerPerson;
+    if (!person?.nextFollowUpAt) {
+      setCalendarPickerPerson(null);
+      return;
+    }
+
+    const destinationLabel =
+      destination === "device"
+        ? "device calendar"
+        : destination === "google"
+          ? "Google Calendar"
+          : destination === "outlook"
+            ? "Outlook Calendar"
+            : destination === "yahoo"
+              ? "Yahoo Calendar"
+              : ".ics download";
+
     try {
-      await markExternalActionStarted("calendar", `Follow-up for ${person.name}`);
-      await openFollowUpInCalendar({
-        name: person.name,
-        company: person.company,
-        nextFollowUpAt: person.nextFollowUpAt,
-        whatMatters: person.whatMatters,
-        nextStep: person.nextStep,
-        linkedinUrl: person.linkedinUrl,
+      setCalendarPickerPerson(null);
+      await markExternalActionStarted(destinationLabel, `Follow-up for ${person.name}`);
+      await openFollowUpInCalendar(
+        {
+          name: person.name,
+          company: person.company,
+          nextFollowUpAt: person.nextFollowUpAt,
+          whatMatters: person.whatMatters,
+          nextStep: person.nextStep,
+          linkedinUrl: person.linkedinUrl,
+        },
+        destination
+      );
+      void captureAnalyticsEvent("calendar_added", {
+        destination,
+        surface: "people_card",
+        follow_up_state: person.followUpState,
+        preferred_channel: person.preferredChannel || undefined,
       });
     } catch (error) {
       await clearPendingExternalAction();
@@ -703,6 +1054,98 @@ export function PersonProfileScreen({
     });
   }
 
+  function openFollowUpExecution(person = selectedPerson) {
+    if (!person) {
+      return;
+    }
+
+    setSelectedPersonId(person.id);
+    setFollowUpPerson(person);
+    setFollowUpMessage(buildMessageForPerson(person));
+    void captureAnalyticsEvent("followup_drafted", {
+      surface: "people",
+      follow_up_state: person.followUpState,
+      preferred_channel: person.preferredChannel || undefined,
+      has_whatsapp: Boolean(person.phoneNumber),
+      has_linkedin: Boolean(person.linkedinUrl),
+      has_email: Boolean(person.email),
+    });
+  }
+
+  async function copyFollowUpMessage() {
+    if (!followUpMessage.trim()) {
+      return;
+    }
+
+    try {
+      await Clipboard.setStringAsync(followUpMessage.trim());
+      void captureAnalyticsEvent("followup_message_copied", {
+        surface: "followup_execution",
+      });
+      Alert.alert("Message copied", "Your follow-up draft is ready to paste.");
+    } catch {
+      Alert.alert("Copy failed", "Could not copy the follow-up message.");
+    }
+  }
+
+  async function logFollowUpOutcome(outcome: FollowUpOutcome, person = followUpPerson) {
+    if (!person) {
+      return;
+    }
+
+    try {
+      const userId = await ensureSessionUserId();
+      await createInteraction({
+        userId,
+        personId: person.id,
+        rawNote: `Follow-up outcome: ${outcome}.\nNext step: ${outcome === "No response" ? "Try again later" : "Review relationship status"}`,
+      });
+
+      if (outcome === "Sent" || outcome === "Replied" || outcome === "Converted" || outcome === "Not relevant") {
+        await markPersonContactedToday(userId, person.id);
+      }
+
+      void captureAnalyticsEvent(outcome === "Sent" ? "followup_marked_sent" : "followup_outcome_recorded", {
+        outcome,
+        surface: "followup_execution",
+        preferred_channel: person.preferredChannel || undefined,
+      });
+
+      setFollowUpPerson(null);
+      setFollowUpMessage("");
+      await loadProfileData();
+      Alert.alert("Outcome saved", `${person.name}: ${outcome}.`);
+    } catch (error) {
+      Alert.alert("Could not save outcome", error instanceof Error ? error.message : "Try again in a moment.");
+    }
+  }
+
+  async function snoozeFollowUp(person = followUpPerson) {
+    if (!person) {
+      return;
+    }
+
+    try {
+      const date = getPresetDate("in3days");
+      const userId = await ensureSessionUserId();
+      await createInteraction({
+        userId,
+        personId: person.id,
+        rawNote: `Reminder set.\nNext step: Follow up\nFollow up date: ${date}`,
+      });
+      setFollowUpPerson(null);
+      setFollowUpMessage("");
+      await loadProfileData();
+      void captureAnalyticsEvent("followup_snoozed", {
+        surface: "followup_execution",
+        snooze_days: 3,
+      });
+      Alert.alert("Snoozed", `${person.name} will come back on ${formatFollowUpDate(date)}.`);
+    } catch (error) {
+      Alert.alert("Could not snooze", error instanceof Error ? error.message : "Try again in a moment.");
+    }
+  }
+
   async function openEmailDraft(person = selectedPerson) {
     if (!person) {
       return;
@@ -714,6 +1157,32 @@ export function PersonProfileScreen({
     }
 
     const message = buildMessageForPerson(person);
+    const subject = person.lastEventName
+      ? `Following up from ${person.lastEventName}`
+      : `Following up with ${person.name}`;
+    const url = `mailto:${encodeURIComponent(person.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`;
+
+    try {
+      await markExternalActionStarted(`Email for ${person.name}`, message);
+      await Linking.openURL(url);
+    } catch {
+      await clearPendingExternalAction();
+      setPendingExternalActionState(null);
+      Alert.alert("Email draft failed", "Could not open your email app for this contact.");
+    }
+  }
+
+  async function openEmailFollowUp(person = followUpPerson) {
+    if (!person) {
+      return;
+    }
+
+    if (!person.email) {
+      Alert.alert("No email address", `Add an email address for ${person.name} before opening an email draft.`);
+      return;
+    }
+
+    const message = followUpMessage.trim() || buildMessageForPerson(person);
     const subject = person.lastEventName
       ? `Following up from ${person.lastEventName}`
       : `Following up with ${person.name}`;
@@ -1013,7 +1482,7 @@ export function PersonProfileScreen({
           <View style={[styles.headerRow, isCompactLayout ? styles.headerRowCompact : null]}>
             <View style={styles.headerCopy}>
               <Typography variant="caption">People</Typography>
-              <Typography variant="h1">Your live contact ledger, sorted by warmth and context.</Typography>
+              <Typography variant="h1">Your relationship command queue.</Typography>
             </View>
             {!isCompactLayout ? (
               <View style={styles.headerActions}>
@@ -1050,38 +1519,51 @@ export function PersonProfileScreen({
   </Card>
 ) : null}
 
-          <Card>
-            <Typography variant="caption">Last connected</Typography>
+          <Card style={styles.attentionCard}>
+            <Typography variant="caption">Attention system</Typography>
             <View style={styles.controlRow}>
               <Button
-                label="All"
-                onPress={() => setStatusMode("all")}
-                variant={statusMode === "all" ? "primary" : "ghost"}
+                label={`Needs follow up ${attentionCounts.needsFollowUp}`}
+                onPress={() => {
+                  setStatusMode("all");
+                  setPeopleView("needsFollowUp");
+                }}
+                variant={peopleView === "needsFollowUp" ? "primary" : "ghost"}
                 fullWidth={false}
                 size="compact"
               />
               <Button
-                label="Today"
-                onPress={() => setStatusMode("today")}
-                variant={statusMode === "today" ? "primary" : "ghost"}
+                label={`Recently met ${attentionCounts.recentlyMet}`}
+                onPress={() => {
+                  setStatusMode("all");
+                  setPeopleView("recentlyMet");
+                }}
+                variant={peopleView === "recentlyMet" ? "primary" : "ghost"}
                 fullWidth={false}
                 size="compact"
               />
               <Button
-                label="Recent"
-                onPress={() => setStatusMode("recent")}
-                variant={statusMode === "recent" ? "primary" : "ghost"}
-                fullWidth={false}
-                size="compact"
-              />
-              <Button
-                label="Stale"
-                onPress={() => setStatusMode("stale")}
-                variant={statusMode === "stale" ? "primary" : "ghost"}
+                label={`All contacts ${attentionCounts.allContacts}`}
+                onPress={() => {
+                  setStatusMode("all");
+                  setPeopleView("allContacts");
+                }}
+                variant={peopleView === "allContacts" ? "primary" : "ghost"}
                 fullWidth={false}
                 size="compact"
               />
             </View>
+            <Typography variant="body" style={styles.confirmMeta}>
+              {peopleView === "needsFollowUp"
+                ? "Overdue, due today, high-priority stale, and recently met contacts without a next step."
+                : peopleView === "recentlyMet"
+                  ? "People captured in the last 7 days with event context ready to review."
+                  : "Searchable archive for everyone you have captured."}
+            </Typography>
+          </Card>
+
+          <Card>
+            <Typography variant="caption">Refine view</Typography>
 
             <Typography variant="caption" style={styles.subSectionLabel}>
               Event type
@@ -1177,7 +1659,7 @@ export function PersonProfileScreen({
                   <Typography variant="caption">Selected contact</Typography>
                   <Typography variant="h1">{selectedPerson.name}</Typography>
                 </View>
-                <PersonQuickActionsButton person={selectedPerson} onChanged={loadProfileData} />
+                <PersonQuickActionsButton person={selectedPerson} onChanged={loadProfileData} onEdit={() => openEditPerson(selectedPerson)} />
               </View>
               <View style={styles.featureMetaRow}>
                 <Typography variant="body" style={styles.featureBody}>
@@ -1199,6 +1681,9 @@ export function PersonProfileScreen({
               {selectedPerson.company ? (
                 <Typography variant="caption">{selectedPerson.company}</Typography>
               ) : null}
+              {selectedPerson.relationshipStatus ? (
+                <Typography variant="caption">Status: {selectedPerson.relationshipStatus}</Typography>
+              ) : null}
               {renderPreferredChannelPill(selectedPerson)}
               {selectedPerson.tags.length ? (
                 <View style={styles.tagPillRow}>
@@ -1214,6 +1699,21 @@ export function PersonProfileScreen({
               {renderContactActionButtons(selectedPerson)}
 
               <View style={styles.secondaryActionRow}>
+                <Button
+                  label="Follow up"
+                  onPress={() => openFollowUpExecution(selectedPerson)}
+                  fullWidth={false}
+                  size="compact"
+                />
+                {selectedPerson.nextFollowUpAt ? (
+                  <Button
+                    label="Add to calendar"
+                    onPress={() => void handleAddToCalendar(selectedPerson)}
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                  />
+                ) : null}
                 <Button
                   label="✓ Reached out"
                   onPress={() => handleMarkContactedToday(selectedPerson)}
@@ -1239,7 +1739,7 @@ export function PersonProfileScreen({
           <View style={styles.timelineHeader}>
             <Typography variant="caption">All connections</Typography>
             <Typography variant="body" style={styles.timelineCount}>
-              {filteredPeople.length} people in view ({sortLabel}{selectedTag !== "all" ? ` · ${selectedTag}` : ""})
+              {visiblePeople.length} people in view ({sortLabel}{selectedTag !== "all" ? ` · ${selectedTag}` : ""})
             </Typography>
           </View>
 
@@ -1250,7 +1750,7 @@ export function PersonProfileScreen({
           ) : null}
 
           <View style={styles.timelineStack}>
-            {filteredPeople.map((person) => (
+            {visiblePeople.map((person) => (
               <Card key={person.id} style={person.id === selectedPerson?.id ? styles.selectedCard : null}>
                 {isCompactLayout ? (
                   <>
@@ -1261,10 +1761,13 @@ export function PersonProfileScreen({
                           {person.company || "No company"}
                         </Typography>
                         {renderPreferredChannelPill(person, true)}
+                        {person.relationshipStatus ? (
+                          <Typography variant="caption">Status: {person.relationshipStatus}</Typography>
+                        ) : null}
                       </View>
                       <View style={styles.compactActions}>
                         {renderCompactPrimaryContactAction(person)}
-                        <PersonQuickActionsButton person={person} onChanged={loadProfileData} />
+                        <PersonQuickActionsButton person={person} onChanged={loadProfileData} onEdit={() => openEditPerson(person)} />
                         <Pressable style={styles.expandButton} onPress={() => handleToggleExpandedPerson(person.id)}>
                           <Typography variant="body" style={styles.iconButtonText}>
                             {selectedPersonId === person.id ? "v" : ">"}
@@ -1289,9 +1792,20 @@ export function PersonProfileScreen({
                           <Typography variant="caption">{getMomentLabel(person.interactionCount)}</Typography>
                         </View>
                         {renderPreferredChannelPill(person)}
+                        {person.relationshipStatus ? <Typography variant="caption">Status: {person.relationshipStatus}</Typography> : null}
                         {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                         {renderContactActionButtons(person, true)}
                         <View style={styles.secondaryActionRow}>
+                          <Button label="Follow up" onPress={() => openFollowUpExecution(person)} fullWidth={false} size="compact" />
+                          {person.nextFollowUpAt ? (
+                            <Button
+                              label="Add to calendar"
+                              onPress={() => void handleAddToCalendar(person)}
+                              variant="ghost"
+                              fullWidth={false}
+                              size="compact"
+                            />
+                          ) : null}
                           <Button label="✓ Reached out" onPress={() => handleMarkContactedToday(person)} variant="ghost" fullWidth={false} size="compact" />
                           <Button label="Edit" onPress={() => setPersonActionMenu(person)} variant="ghost" fullWidth={false} size="compact" />
                         </View>
@@ -1299,7 +1813,7 @@ export function PersonProfileScreen({
                     ) : null}
                   </>
                 ) : (
-                  <Pressable onPress={() => setSelectedPersonId(person.id)}>
+                  <Pressable onPress={() => openFollowUpExecution(person)}>
                     <View style={styles.rowTop}>
                       <View style={styles.personCopy}>
                         <Typography variant="h2">{person.name}</Typography>
@@ -1307,9 +1821,26 @@ export function PersonProfileScreen({
                           {[person.company, person.lastEventName || "No event yet"].filter(Boolean).join(" · ")}
                         </Typography>
                         {renderPreferredChannelPill(person)}
+                        {person.relationshipStatus ? <Typography variant="caption">Status: {person.relationshipStatus}</Typography> : null}
                         {person.tags.length ? <Typography variant="caption">Tags: {person.tags.join(", ")}</Typography> : null}
                       </View>
                       <View style={styles.cardActionRow}>
+                        <Button
+                          label="Follow up"
+                          onPress={() => openFollowUpExecution(person)}
+                          variant="primary"
+                          fullWidth={false}
+                          size="compact"
+                        />
+                        {person.nextFollowUpAt ? (
+                          <Button
+                            label="Calendar"
+                            onPress={() => void handleAddToCalendar(person)}
+                            variant="ghost"
+                            fullWidth={false}
+                            size="compact"
+                          />
+                        ) : null}
                         <Button
                           label="Edit"
                           onPress={() => setPersonActionMenu(person)}
@@ -1317,7 +1848,7 @@ export function PersonProfileScreen({
                           fullWidth={false}
                           size="compact"
                         />
-                        <PersonQuickActionsButton person={person} onChanged={loadProfileData} />
+                        <PersonQuickActionsButton person={person} onChanged={loadProfileData} onEdit={() => openEditPerson(person)} />
                       </View>
                     </View>
                     <Typography variant="body" style={styles.noteText} numberOfLines={2}>
@@ -1334,7 +1865,7 @@ export function PersonProfileScreen({
                 )}
               </Card>
             ))}
-            {!isLoading && filteredPeople.length === 0 ? (
+            {!isLoading && visiblePeople.length === 0 ? (
               searchQuery.trim() ? (
                 <Card style={styles.emptyStateCard}>
                   <Typography variant="h2">No contact found for "{searchQuery.trim()}"</Typography>
@@ -1354,14 +1885,17 @@ export function PersonProfileScreen({
 
         <CaptureModal
           visible={isCaptureOpen}
-          onClose={() => setCaptureOpen(false)}
+          onClose={closePeopleCapture}
           onSave={handleSaveInteraction}
           isSaving={isSaving}
           initialDraft={editorDraft}
           lockedEvent={editorMode === "edit" ? null : currentEvent}
           title={editorMode === "edit" ? "Edit Contact" : editorMode === "createPerson" ? "Add Person" : "Add Interaction"}
-          saveLabel={editorMode === "edit" ? "Save Changes" : editorMode === "createPerson" ? "Save Person" : "Save Interaction"}
+          saveLabel={editorMode === "edit" ? "Save Changes" : editorMode === "createPerson" ? "Save & Close" : "Save Interaction"}
           showQuickCapture={editorMode === "createPerson"}
+          showSaveAndAddAnother={editorMode !== "edit"}
+          draftStorageKey={PEOPLE_CAPTURE_DRAFT_STORAGE_KEY}
+          autosaveWithInitialDraft
         />
 
         <Modal visible={isUpdateModalOpen} animationType="slide" presentationStyle="pageSheet">
@@ -1377,10 +1911,7 @@ export function PersonProfileScreen({
                 </View>
                 <Button
                   label="Close"
-                  onPress={() => {
-                    setUpdateModalOpen(false);
-                    setUpdatePerson(null);
-                  }}
+                  onPress={closeLogUpdate}
                   variant="ghost"
                   fullWidth={false}
                   size="compact"
@@ -1455,7 +1986,38 @@ export function PersonProfileScreen({
                       fullWidth={false}
                       size="compact"
                     />
+                    <Button
+                      label={isCheckingUpdateCalendar ? "Checking..." : "Check calendar"}
+                      onPress={() => void handleCheckUpdateCalendarSlots()}
+                      variant="ghost"
+                      fullWidth={false}
+                      size="compact"
+                      disabled={isCheckingUpdateCalendar}
+                    />
                   </View>
+                  {updateCalendarSlots.length ? (
+                    <View style={styles.calendarOptionStack}>
+                      <Typography variant="caption">
+                        {updateCalendarSlots[0]?.source === "google"
+                          ? "Free slots from Google Calendar"
+                          : updateCalendarSlots[0]?.source === "device"
+                            ? "Free slots from device calendar"
+                            : "Suggested slots"}
+                      </Typography>
+                      <View style={styles.controlRow}>
+                        {updateCalendarSlots.map((slot) => (
+                          <Button
+                            key={`${slot.dateOnly}-${slot.label}`}
+                            label={slot.label}
+                            onPress={() => handleUpdateCalendarSlotSelect(slot)}
+                            variant={updateDraft.dueDate === slot.dateOnly ? "primary" : "ghost"}
+                            fullWidth={false}
+                            size="compact"
+                          />
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
                   <TextInput
                     value={updateDraft.dueDate}
                     onChangeText={(value) => setUpdateDraft((current) => ({ ...current, dueDate: value }))}
@@ -1511,7 +2073,7 @@ export function PersonProfileScreen({
                   Choose who this update belongs to.
                 </Typography>
                 <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
-                  {filteredPeople.map((person) => (
+                  {visiblePeople.map((person) => (
                     <Button
                       key={person.id}
                       label={person.name}
@@ -1550,6 +2112,114 @@ export function PersonProfileScreen({
           </View>
         ) : null}
 
+        {followUpPerson ? (
+          <View style={styles.confirmOverlay}>
+            <Pressable style={styles.confirmBackdrop} onPress={() => setFollowUpPerson(null)} />
+            <View style={styles.confirmCardWrap}>
+              <Card style={styles.followUpCard}>
+                <ScrollView contentContainerStyle={styles.followUpContent} showsVerticalScrollIndicator={false}>
+                  <View style={styles.selectedContactHeader}>
+                    <View style={styles.selectedContactTitle}>
+                      <Typography variant="caption">Execute follow-up</Typography>
+                      <Typography variant="h1">{followUpPerson.name}</Typography>
+                      {followUpPerson.company ? <Typography variant="caption">{followUpPerson.company}</Typography> : null}
+                    </View>
+                    <Button label="Close" onPress={() => setFollowUpPerson(null)} variant="ghost" fullWidth={false} size="compact" />
+                  </View>
+
+                  <View style={styles.followUpInfoGrid}>
+                    <View style={styles.followUpInfoBlock}>
+                      <Typography variant="caption">Met at</Typography>
+                      <Typography variant="body" style={styles.confirmMeta}>{followUpPerson.lastEventName || "No event logged"}</Typography>
+                    </View>
+                    <View style={styles.followUpInfoBlock}>
+                      <Typography variant="caption">Preferred channel</Typography>
+                      <Typography variant="body" style={styles.confirmMeta}>
+                        {formatPreferredChannelLabel(followUpPerson.preferredChannel, followUpPerson.preferredChannelOther)}
+                      </Typography>
+                    </View>
+                  </View>
+
+                  <View style={styles.followUpInfoBlock}>
+                    <Typography variant="caption">Why they matter</Typography>
+                    <Typography variant="body" style={styles.confirmPreview}>{followUpPerson.whatMatters}</Typography>
+                  </View>
+
+                  <View style={styles.followUpInfoBlock}>
+                    <Typography variant="caption">Next step</Typography>
+                    <Typography variant="body" style={styles.confirmPreview}>{followUpPerson.nextStep || "No next step yet"}</Typography>
+                  </View>
+
+                  {followUpPerson.relationshipStatus ? (
+                    <View style={styles.followUpInfoBlock}>
+                      <Typography variant="caption">Status</Typography>
+                      <Typography variant="body" style={styles.confirmPreview}>{followUpPerson.relationshipStatus}</Typography>
+                    </View>
+                  ) : null}
+
+                  <View style={styles.followUpInfoBlock}>
+                    <Typography variant="caption">Suggested message</Typography>
+                    <TextInput
+                      value={followUpMessage}
+                      onChangeText={setFollowUpMessage}
+                      multiline
+                      placeholder="Write the follow-up message"
+                      placeholderTextColor={colors.textTertiary}
+                      style={styles.draftEditorInput}
+                    />
+                  </View>
+
+                  <View style={styles.confirmActions}>
+                    <Button label="Copy message" onPress={() => void copyFollowUpMessage()} variant="ghost" fullWidth={false} size="compact" />
+                    <Button
+                      label="Open WhatsApp"
+                      onPress={() => void openDraftMessage(followUpPerson, followUpMessage)}
+                      variant={followUpPerson.preferredChannel === "whatsapp" ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                      disabled={!followUpPerson.phoneNumber}
+                    />
+                    <Button
+                      label="Open LinkedIn"
+                      onPress={() => void copyLinkedInDraftAndOpen(followUpPerson, followUpMessage)}
+                      variant={followUpPerson.preferredChannel === "linkedin" ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                      disabled={!followUpPerson.linkedinUrl}
+                    />
+                    <Button
+                      label="Open Email"
+                      onPress={() => void openEmailFollowUp(followUpPerson)}
+                      variant={followUpPerson.preferredChannel === "email" ? "primary" : "ghost"}
+                      fullWidth={false}
+                      size="compact"
+                      disabled={!followUpPerson.email}
+                    />
+                    <Button label="Mark sent" onPress={() => void logFollowUpOutcome("Sent", followUpPerson)} fullWidth={false} size="compact" />
+                    <Button label="Snooze" onPress={() => void snoozeFollowUp(followUpPerson)} variant="ghost" fullWidth={false} size="compact" />
+                  </View>
+
+                  <View style={styles.followUpInfoBlock}>
+                    <Typography variant="caption">Outcome</Typography>
+                    <View style={styles.confirmActions}>
+                      {(["Sent", "Replied", "No response", "Converted", "Not relevant"] as FollowUpOutcome[]).map((outcome) => (
+                        <Button
+                          key={outcome}
+                          label={outcome}
+                          onPress={() => void logFollowUpOutcome(outcome, followUpPerson)}
+                          variant={outcome === "Converted" ? "primary" : "ghost"}
+                          fullWidth={false}
+                          size="compact"
+                        />
+                      ))}
+                    </View>
+                  </View>
+                </ScrollView>
+              </Card>
+            </View>
+          </View>
+        ) : null}
+
 
 {showPendingExternalReturn && pendingExternalAction ? (
   <View style={styles.confirmOverlay}>
@@ -1581,6 +2251,46 @@ export function PersonProfileScreen({
     </View>
   </View>
 ) : null}
+
+        {calendarPickerPerson ? (
+          <View style={styles.confirmOverlay}>
+            <Pressable style={styles.confirmBackdrop} onPress={() => setCalendarPickerPerson(null)} />
+            <View style={styles.confirmCardWrap}>
+              <Card style={styles.confirmCard}>
+                <Typography variant="h2">Add to calendar</Typography>
+                <Typography variant="body" style={styles.confirmMeta}>
+                  Pick where to save the follow-up for {calendarPickerPerson.name}.
+                </Typography>
+                <View style={styles.calendarOptionStack}>
+                  {calendarDestinationOptions.map((option) => (
+                    <Button
+                      key={option.value}
+                      label={option.label}
+                      variant="ghost"
+                      fullWidth={false}
+                      size="compact"
+                      onPress={() => {
+                        void handleCalendarDestinationSelect(option.value);
+                      }}
+                    />
+                  ))}
+                </View>
+                <Typography variant="caption" style={styles.confirmMeta}>
+                  Google, Outlook, and Yahoo open prefilled calendar pages. Download `.ics` is the browser fallback.
+                </Typography>
+                <View style={styles.confirmActions}>
+                  <Button
+                    label="Cancel"
+                    variant="ghost"
+                    fullWidth={false}
+                    size="compact"
+                    onPress={() => setCalendarPickerPerson(null)}
+                  />
+                </View>
+              </Card>
+            </View>
+          </View>
+        ) : null}
 
         {draftPreviewPerson ? (
           <View style={styles.confirmOverlay}>
@@ -1707,10 +2417,13 @@ export function PersonProfileScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useTheme>["colors"]) => StyleSheet.create({
   pendingExternalCard: {
     gap: 12,
     borderColor: colors.primaryAction,
+  },
+  attentionCard: {
+    gap: 12,
   },
   safeArea: {
     flex: 1,
@@ -1827,11 +2540,29 @@ const styles = StyleSheet.create({
     maxWidth: 520,
     gap: 12,
   },
+  followUpCard: {
+    width: "100%",
+    maxWidth: 620,
+    maxHeight: "88%",
+  },
+  followUpContent: {
+    gap: 12,
+  },
   confirmMeta: {
     color: colors.textSecondary,
   },
   confirmPreview: {
     color: colors.textPrimary,
+  },
+  followUpInfoGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  followUpInfoBlock: {
+    gap: 6,
+    flex: 1,
+    minWidth: 180,
   },
   updateModalContainer: {
     flex: 1,
@@ -1891,6 +2622,9 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
+  calendarOptionStack: {
+    gap: 8,
+  },
   pickerList: {
     maxHeight: 260,
   },
@@ -1945,7 +2679,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   iconButtonTextPreferred: {
-    color: colors.background,
+    color: colors.onPrimary,
   },
   expandedPersonContent: {
     marginTop: 14,

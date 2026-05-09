@@ -68,6 +68,7 @@ export type PersonInsight = {
   lastInteractionNote: string;
   whatMatters: string;
   nextStep: string;
+  relationshipStatus: string;
   nextFollowUpAt: string | null;
   nextFollowUpLabel: string;
   followUpState: "none" | "upcoming" | "dueToday" | "overdue";
@@ -138,7 +139,7 @@ export function parseDateOnlyString(value?: string | null) {
     return null;
   }
 
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!match) {
     return null;
   }
@@ -185,16 +186,28 @@ export function getPresetDate(preset: FollowUpPreset, baseDate = new Date()) {
 }
 
 export function formatFollowUpDate(value?: string | null) {
-  const parsed = parseDateOnlyString(value);
-  if (!parsed) {
+  const hasTime = Boolean(value?.includes("T"));
+  const parsed = hasTime ? new Date(value as string) : parseDateOnlyString(value);
+  if (!parsed || Number.isNaN(parsed.getTime())) {
     return "No follow-up date";
   }
 
-  return parsed.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
+  const dayLabel = parsed.toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+
+  if (!hasTime) {
+    return dayLabel;
+  }
+
+  const timeLabel = parsed.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
   });
+
+  return `${dayLabel} • ${timeLabel}`;
 }
 
 export function normalizeEventDate(value?: string | null) {
@@ -380,15 +393,20 @@ export async function getOrCreateEvent(
   assertNoError(findError);
   if (existing) {
     const needsCategoryUpdate = normalizedCategory && existing.category !== normalizedCategory;
-    const needsDateUpdate = (existing.event_date || null) !== normalizedEventDate;
+    const needsDateUpdate = normalizedEventDate !== null && (existing.event_date || null) !== normalizedEventDate;
 
     if (needsCategoryUpdate || needsDateUpdate) {
+      const updatePayload: Pick<EventRow, "category"> & Partial<Pick<EventRow, "event_date">> = {
+        category: normalizedCategory,
+      };
+
+      if (needsDateUpdate) {
+        updatePayload.event_date = normalizedEventDate;
+      }
+
       const { data: updated, error: updateError } = await client
         .from("events")
-        .update({
-          category: normalizedCategory,
-          event_date: normalizedEventDate,
-        })
+        .update(updatePayload)
         .eq("user_id", userId)
         .eq("id", existing.id)
         .select("id,name,category,event_date,created_at")
@@ -710,6 +728,7 @@ export async function listPeopleInsights(userId: string) {
     const rawNote = lastInteraction?.raw_note || "";
     const whatMatters = extractPrimaryNote(rawNote) || "No interactions yet.";
     const nextStep = extractNextStep(rawNote);
+    const relationshipStatus = extractRelationshipStatus(rawNote);
     const nextFollowUpAt = extractFollowUpDate(rawNote);
 
     return {
@@ -730,6 +749,7 @@ export async function listPeopleInsights(userId: string) {
       lastInteractionNote: whatMatters,
       whatMatters,
       nextStep,
+      relationshipStatus,
       nextFollowUpAt,
       nextFollowUpLabel: nextFollowUpAt ? formatFollowUpDate(nextFollowUpAt) : "No follow-up date",
       followUpState: getFollowUpState(nextFollowUpAt),
@@ -878,6 +898,8 @@ function stripInteractionMetadata(rawNote: string) {
     .replace(/^Company:\s*.+$/gim, "")
     .replace(/^Update\s*type:\s*.+$/gim, "")
     .replace(/^Status:\s*.+$/gim, "")
+    .replace(/^Relationship\s*goal:\s*.+$/gim, "")
+    .replace(/^Relationship\s*status:\s*.+$/gim, "")
     .replace(/^Next\s*step:\s*.+$/gim, "")
     .replace(/^Follow\s*up\s*date:\s*.+$/gim, "")
     .replace(/^Follow\s*up:\s*.+$/gim, "")
@@ -900,6 +922,11 @@ export function extractNextStep(rawNote: string) {
   }
 
   return "";
+}
+
+export function extractRelationshipStatus(rawNote: string) {
+  const explicitMatch = rawNote.match(/^Relationship\s*status:\s*(.+)$/im);
+  return explicitMatch?.[1]?.trim() || "";
 }
 
 export function extractFollowUp(rawNote: string) {
